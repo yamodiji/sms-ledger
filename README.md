@@ -2,6 +2,8 @@
 
 A Flutter app that automatically parses SMS messages from banks to track your income and expenses.
 
+<!-- Build trigger: Updated with Android 13+ permission fixes -->
+
 [![Build Flutter APK](https://github.com/YOUR_USERNAME/YOUR_REPO_NAME/actions/workflows/build-apk.yml/badge.svg)](https://github.com/YOUR_USERNAME/YOUR_REPO_NAME/actions/workflows/build-apk.yml)
 
 ## 🚀 **Quick Start - Get Your APK**
@@ -95,6 +97,19 @@ This repository includes automated APK building using GitHub Actions. Here's how
 ### **Permissions Required**
 - `READ_SMS` - To read SMS messages
 - `RECEIVE_SMS` - To receive new SMS messages
+
+### **⚠️ Important: Android 13+ Permission Issue**
+
+If you see "App was denied access" or "Access to this permission can put your personal and financial info at risk", this is Android's **Restricted Settings** protection.
+
+**Quick Fix:**
+1. Open **Settings → Apps → SMS Ledger**
+2. Tap **More** (three dots) → **Allow restricted settings**
+3. Follow instructions and grant SMS permission
+
+**📖 For detailed help, see:** [ANDROID_PERMISSIONS_GUIDE.md](ANDROID_PERMISSIONS_GUIDE.md)
+
+**✅ Safe to use:** The app only reads transaction SMS locally on your device. No data is sent anywhere.
 
 ## 🛠️ **Development Setup**
 

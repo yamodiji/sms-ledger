@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import '../models/transaction.dart';
 import '../services/sms_service.dart';
 import '../widgets/transaction_item.dart';
@@ -11,165 +12,191 @@ class LedgerScreen extends StatefulWidget {
 }
 
 class _LedgerScreenState extends State<LedgerScreen> {
-  bool _showExpenses = true;
-  List<Transaction> _allTransactions = [];
-  List<Transaction> _filteredTransactions = [];
-  bool _isLoading = true;
-  bool _hasPermission = false;
-  bool _isUsingDummyData = false;
   final SmsService _smsService = SmsService();
+  List<Transaction> _transactions = [];
+  bool _isLoading = true;
+  bool _showExpenses = true; // true for expenses, false for income
+  SmsPermissionResult? _permissionStatus;
 
   @override
   void initState() {
     super.initState();
-    _checkPermissionAndLoadTransactions();
+    _loadTransactions();
   }
 
-  Future<void> _checkPermissionAndLoadTransactions() async {
+  Future<void> _loadTransactions() async {
     setState(() {
       _isLoading = true;
     });
 
-    final hasPermission = await _smsService.checkSmsPermission();
-    setState(() {
-      _hasPermission = hasPermission;
-    });
-
-    if (hasPermission) {
-      await _loadRealTransactions();
-    } else {
-      await _loadDummyTransactions();
-    }
-  }
-
-  Future<void> _loadRealTransactions() async {
     try {
-      List<Transaction> transactions = await _smsService.getTransactions();
+      // Check permission status first
+      _permissionStatus = await _smsService.requestSmsPermission();
+      
+      // Load transactions (will return sample data if no permission)
+      final transactions = await _smsService.getTransactions();
       
       setState(() {
-        _allTransactions = transactions;
-        _isUsingDummyData = false;
-        _filterTransactions();
+        _transactions = transactions;
         _isLoading = false;
       });
+
+      // Show permission dialog if needed
+      if (_permissionStatus != SmsPermissionResult.granted && mounted) {
+        _showPermissionDialog();
+      }
     } catch (e) {
-      await _loadDummyTransactions();
-    }
-  }
-
-  Future<void> _loadDummyTransactions() async {
-    setState(() {
-      _allTransactions = _smsService.getSampleTransactions();
-      _isUsingDummyData = true;
-      _filterTransactions();
-      _isLoading = false;
-    });
-  }
-
-  Future<void> _requestPermission() async {
-    final granted = await _smsService.requestSmsPermission();
-    if (granted) {
-      await _checkPermissionAndLoadTransactions();
-    } else {
-      _showPermissionDialog();
+      setState(() {
+        _transactions = _smsService.getSampleTransactions();
+        _isLoading = false;
+      });
     }
   }
 
   void _showPermissionDialog() {
+    String title;
+    String message;
+    List<Widget> actions;
+
+    switch (_permissionStatus) {
+      case SmsPermissionResult.restricted:
+        title = 'SMS Permission Restricted';
+        message = 'Android has restricted SMS access for security. To enable SMS reading:\n\n'
+            '1. Tap "Open Settings" below\n'
+            '2. Find "SMS Ledger" in the app list\n'
+            '3. Tap "More" → "Allow restricted settings"\n'
+            '4. Follow the on-screen instructions\n'
+            '5. Grant SMS permission\n\n'
+            'This app needs SMS access to read your bank transaction messages.';
+        actions = [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Use Demo Data'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.of(context).pop();
+              await _smsService.openRestrictedSettings();
+            },
+            child: const Text('Open Settings'),
+          ),
+        ];
+        break;
+      case SmsPermissionResult.permanentlyDenied:
+        title = 'SMS Permission Required';
+        message = 'SMS permission has been permanently denied. To enable SMS reading:\n\n'
+            '1. Tap "Open Settings" below\n'
+            '2. Find "Permissions" or "App permissions"\n'
+            '3. Enable SMS permission\n\n'
+            'This app needs SMS access to read your bank transaction messages.';
+        actions = [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Use Demo Data'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.of(context).pop();
+              await _smsService.openPermissionSettings();
+            },
+            child: const Text('Open Settings'),
+          ),
+        ];
+        break;
+      case SmsPermissionResult.denied:
+        title = 'SMS Permission Needed';
+        message = 'This app needs SMS permission to read your bank transaction messages. '
+            'Would you like to grant permission now?';
+        actions = [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Use Demo Data'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.of(context).pop();
+              await _loadTransactions();
+            },
+            child: const Text('Grant Permission'),
+          ),
+        ];
+        break;
+      default:
+        return; // Don't show dialog for granted permission
+    }
+
     showDialog(
       context: context,
+      barrierDismissible: false,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: const Text('SMS Permission Required'),
-          content: const Text(
-            'This app needs SMS permission to read your transaction messages. '
-            'Please grant permission in app settings to see real transactions.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: () async {
-                Navigator.of(context).pop();
-                await _smsService.openPermissionSettings();
-              },
-              child: const Text('Open Settings'),
-            ),
-          ],
+          title: Text(title),
+          content: Text(message),
+          actions: actions,
         );
       },
     );
   }
 
-  void _filterTransactions() {
-    setState(() {
-      if (_showExpenses) {
-        _filteredTransactions = _allTransactions
-            .where((transaction) => !transaction.isCredit)
-            .toList();
-      } else {
-        _filteredTransactions = _allTransactions
-            .where((transaction) => transaction.isCredit)
-            .toList();
-      }
-    });
+  List<Transaction> get _filteredTransactions {
+    return _transactions.where((transaction) {
+      return _showExpenses ? !transaction.isCredit : transaction.isCredit;
+    }).toList();
   }
 
-  void _toggleTransactionType(bool showExpenses) {
-    setState(() {
-      _showExpenses = showExpenses;
-      _filterTransactions();
-    });
+  double get _totalAmount {
+    return _filteredTransactions.fold(0.0, (sum, transaction) => sum + transaction.amount);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Ledger'),
+        title: const Text('SMS Ledger'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _loadTransactions,
+            tooltip: 'Refresh Transactions',
+          ),
+          if (_permissionStatus != SmsPermissionResult.granted)
+            IconButton(
+              icon: const Icon(Icons.settings),
+              onPressed: _showPermissionDialog,
+              tooltip: 'Permission Settings',
+            ),
+        ],
       ),
       body: Column(
         children: [
           // Permission status banner
-          if (!_hasPermission || _isUsingDummyData)
+          if (_permissionStatus != SmsPermissionResult.granted)
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(12),
-              color: Colors.orange[100],
+              color: Colors.orange.shade100,
               child: Row(
                 children: [
-                  Icon(
-                    Icons.warning_amber,
-                    color: Colors.orange[800],
-                    size: 20,
-                  ),
+                  Icon(Icons.warning, color: Colors.orange.shade700),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      _hasPermission 
-                          ? 'No SMS transactions found. Showing sample data.'
-                          : 'SMS permission required to read real transactions.',
-                      style: TextStyle(
-                        color: Colors.orange[800],
-                        fontSize: 14,
-                      ),
+                      _permissionStatus == SmsPermissionResult.restricted
+                          ? 'SMS access restricted - showing demo data'
+                          : 'SMS permission needed - showing demo data',
+                      style: TextStyle(color: Colors.orange.shade700),
                     ),
                   ),
-                  if (!_hasPermission)
-                    TextButton(
-                      onPressed: _requestPermission,
-                      child: const Text(
-                        'Grant Permission',
-                        style: TextStyle(fontSize: 12),
-                      ),
-                    ),
+                  TextButton(
+                    onPressed: _showPermissionDialog,
+                    child: const Text('Fix'),
+                  ),
                 ],
               ),
             ),
           
+          // Toggle Switch
           Container(
             padding: const EdgeInsets.all(16),
             child: Row(
@@ -179,14 +206,18 @@ class _LedgerScreenState extends State<LedgerScreen> {
                   'Income',
                   style: TextStyle(
                     fontSize: 16,
-                    fontWeight: !_showExpenses ? FontWeight.bold : FontWeight.normal,
-                    color: !_showExpenses ? Colors.green : Colors.grey,
+                    fontWeight: _showExpenses ? FontWeight.normal : FontWeight.bold,
+                    color: _showExpenses ? Colors.grey : Colors.green,
                   ),
                 ),
                 const SizedBox(width: 16),
                 Switch(
                   value: _showExpenses,
-                  onChanged: _toggleTransactionType,
+                  onChanged: (value) {
+                    setState(() {
+                      _showExpenses = value;
+                    });
+                  },
                   activeColor: Colors.red,
                   inactiveThumbColor: Colors.green,
                 ),
@@ -202,41 +233,38 @@ class _LedgerScreenState extends State<LedgerScreen> {
               ],
             ),
           ),
-          
+
+          // Total Amount
           Container(
-            margin: const EdgeInsets.symmetric(horizontal: 16),
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: _showExpenses ? Colors.red[50] : Colors.green[50],
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: _showExpenses ? Colors.red[200]! : Colors.green[200]!,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Total ${_showExpenses ? 'Expenses' : 'Income'}:',
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    Text(
+                      '₹${NumberFormat('#,##,###.00').format(_totalAmount)}',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: _showExpenses ? Colors.red : Colors.green,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  _showExpenses ? 'Total Expenses' : 'Total Income',
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                Text(
-                  _getTotalAmount(),
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: _showExpenses ? Colors.red : Colors.green,
-                  ),
-                ),
-              ],
-            ),
           ),
-          
-          const SizedBox(height: 16),
-          
+
+          // Transaction List
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
@@ -252,19 +280,22 @@ class _LedgerScreenState extends State<LedgerScreen> {
                             ),
                             const SizedBox(height: 16),
                             Text(
-                              _showExpenses 
-                                  ? 'No expenses found'
-                                  : 'No income found',
+                              'No ${_showExpenses ? 'expenses' : 'income'} found',
                               style: const TextStyle(
                                 fontSize: 18,
                                 color: Colors.grey,
                               ),
                             ),
+                            const SizedBox(height: 8),
+                            const Text(
+                              'Pull down to refresh',
+                              style: TextStyle(color: Colors.grey),
+                            ),
                           ],
                         ),
                       )
                     : RefreshIndicator(
-                        onRefresh: _checkPermissionAndLoadTransactions,
+                        onRefresh: _loadTransactions,
                         child: ListView.builder(
                           itemCount: _filteredTransactions.length,
                           itemBuilder: (context, index) {
@@ -277,22 +308,6 @@ class _LedgerScreenState extends State<LedgerScreen> {
           ),
         ],
       ),
-      floatingActionButton: !_hasPermission ? FloatingActionButton.extended(
-        onPressed: _requestPermission,
-        icon: const Icon(Icons.sms),
-        label: const Text('Enable SMS'),
-        backgroundColor: Colors.orange,
-      ) : null,
     );
-  }
-
-  String _getTotalAmount() {
-    double total = 0;
-    for (final transaction in _filteredTransactions) {
-      total += transaction.amount;
-    }
-    
-    final prefix = _showExpenses ? '-₹' : '+₹';
-    return '$prefix${total.toStringAsFixed(2)}';
   }
 } 

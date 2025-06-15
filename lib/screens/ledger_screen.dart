@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import '../models/transaction.dart';
 import '../services/sms_service.dart';
 import '../widgets/transaction_item.dart';
+import '../widgets/permission_dialog.dart';
 
 class LedgerScreen extends StatefulWidget {
   const LedgerScreen({super.key});
@@ -17,126 +18,112 @@ class _LedgerScreenState extends State<LedgerScreen> {
   bool _isLoading = true;
   bool _showExpenses = true; // true for expenses, false for income
   SmsPermissionResult? _permissionStatus;
+  bool _hasShownPermissionDialog = false;
 
   @override
   void initState() {
     super.initState();
-    _loadTransactions();
+    _checkPermissionAndLoad();
   }
 
-  Future<void> _loadTransactions() async {
+  Future<void> _checkPermissionAndLoad() async {
     setState(() {
       _isLoading = true;
     });
 
     try {
-      // Check permission status first
-      _permissionStatus = await _smsService.requestSmsPermissionWithGuidance();
+      // Check if we should ask for permission
+      final shouldAsk = await _smsService.shouldAskPermissionAgain();
+      final hasPermission = await _smsService.checkSmsPermission();
       
+      if (!hasPermission && shouldAsk && !_hasShownPermissionDialog) {
+        _hasShownPermissionDialog = true;
+        // Show native-style permission dialog immediately
+        _showNativePermissionDialog();
+      }
+      
+      await _loadTransactions();
+    } catch (e) {
+      await _loadTransactions();
+    }
+  }
+
+  Future<void> _loadTransactions() async {
+    try {
       // Load transactions (will return sample data if no permission)
       final transactions = await _smsService.getTransactions();
+      final hasPermission = await _smsService.checkSmsPermission();
       
       setState(() {
         _transactions = transactions;
         _isLoading = false;
+        _permissionStatus = hasPermission 
+            ? SmsPermissionResult.granted 
+            : SmsPermissionResult.denied;
       });
-
-      // Show permission dialog if needed
-      if (_permissionStatus != SmsPermissionResult.granted && mounted) {
-        _showSimplePermissionDialog();
-      }
     } catch (e) {
       setState(() {
         _transactions = _smsService.getSampleTransactions();
         _isLoading = false;
+        _permissionStatus = SmsPermissionResult.denied;
       });
     }
   }
 
-  void _showSimplePermissionDialog() {
-    String title;
-    String message;
-    List<Widget> actions;
+  void _showNativePermissionDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return PermissionDialog(
+          onDontAllow: () async {
+            Navigator.of(context).pop();
+            await _smsService.savePermissionChoice('dont_allow');
+            await _loadTransactions();
+          },
+          onAllowOnlyThisTime: () async {
+            Navigator.of(context).pop();
+            await _smsService.savePermissionChoice('only_this_time');
+            await _requestPermissionAndLoad();
+          },
+          onAllowWhileUsingApp: () async {
+            Navigator.of(context).pop();
+            await _smsService.savePermissionChoice('while_using_app');
+            await _requestPermissionAndLoad();
+          },
+        );
+      },
+    );
+  }
 
-    switch (_permissionStatus) {
-      case SmsPermissionResult.restricted:
-        title = '📱 Enable SMS Access';
-        message = 'To show your real bank transactions, please:\n\n'
-            '1️⃣ Tap "Settings" below\n'
-            '2️⃣ Find "SMS Ledger" app\n'
-            '3️⃣ Tap the menu (⋮) and select "Allow restricted settings"\n'
-            '4️⃣ Turn ON SMS permission\n\n'
-            '✅ Your SMS data stays private on your phone\n'
-            '✅ We only read bank transaction messages';
-        actions = [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Use Demo Mode'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              Navigator.of(context).pop();
-              await _smsService.openRestrictedSettings();
-            },
-            child: const Text('Open Settings'),
-          ),
-        ];
-        break;
-      case SmsPermissionResult.permanentlyDenied:
-        title = '📱 SMS Permission Needed';
-        message = 'To read your bank transaction messages:\n\n'
-            '1️⃣ Tap "Settings" below\n'
-            '2️⃣ Find "Permissions"\n'
-            '3️⃣ Turn ON SMS permission\n\n'
-            '✅ Safe: Only reads bank messages\n'
-            '✅ Private: Data stays on your phone';
-        actions = [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Use Demo Mode'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              Navigator.of(context).pop();
-              await _smsService.openPermissionSettings();
-            },
-            child: const Text('Open Settings'),
-          ),
-        ];
-        break;
-      case SmsPermissionResult.denied:
-        title = '📱 Allow SMS Access?';
-        message = 'SMS Ledger needs to read your bank transaction messages to track your expenses and income.\n\n'
-            '✅ Only reads bank messages (HDFC, ICICI, SBI, etc.)\n'
-            '✅ Your personal messages are never accessed\n'
-            '✅ All data stays on your phone\n\n'
-            'Would you like to allow SMS access?';
-        actions = [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Use Demo Mode'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              Navigator.of(context).pop();
-              await _loadTransactions();
-            },
-            child: const Text('Allow SMS'),
-          ),
-        ];
-        break;
-      default:
-        return; // Don't show dialog for granted permission
+  Future<void> _requestPermissionAndLoad() async {
+    try {
+      final result = await _smsService.requestSmsPermissionDirect();
+      
+      if (result == SmsPermissionResult.restricted) {
+        // Show restricted settings dialog
+        _showRestrictedSettingsDialog();
+      } else {
+        await _loadTransactions();
+      }
+    } catch (e) {
+      await _loadTransactions();
     }
+  }
 
+  void _showRestrictedSettingsDialog() {
     showDialog(
       context: context,
       barrierDismissible: true,
       builder: (BuildContext context) {
-        return AlertDialog(
-          title: Text(title, style: const TextStyle(fontSize: 18)),
-          content: Text(message, style: const TextStyle(fontSize: 14)),
-          actions: actions,
+        return RestrictedSettingsDialog(
+          onOpenSettings: () async {
+            Navigator.of(context).pop();
+            await _smsService.openPermissionSettings();
+          },
+          onUseDemoMode: () {
+            Navigator.of(context).pop();
+          },
         );
       },
     );
@@ -161,20 +148,23 @@ class _LedgerScreenState extends State<LedgerScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _loadTransactions,
+            onPressed: _checkPermissionAndLoad,
             tooltip: 'Refresh Transactions',
           ),
           if (_permissionStatus != SmsPermissionResult.granted)
             IconButton(
-              icon: const Icon(Icons.help_outline),
-              onPressed: _showSimplePermissionDialog,
-              tooltip: 'Help with SMS Access',
+              icon: const Icon(Icons.settings),
+              onPressed: () {
+                _hasShownPermissionDialog = false;
+                _showNativePermissionDialog();
+              },
+              tooltip: 'SMS Permissions',
             ),
         ],
       ),
       body: Column(
         children: [
-          // Permission status banner
+          // Permission status banner (only if no permission)
           if (_permissionStatus != SmsPermissionResult.granted)
             Container(
               width: double.infinity,
@@ -186,15 +176,16 @@ class _LedgerScreenState extends State<LedgerScreen> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      _permissionStatus == SmsPermissionResult.restricted
-                          ? '📱 Enable SMS access to see your real transactions'
-                          : '📱 SMS access needed for real transaction data',
+                      'Tap the settings icon to enable SMS access for real transactions',
                       style: TextStyle(color: Colors.blue.shade700, fontSize: 13),
                     ),
                   ),
                   TextButton(
-                    onPressed: _showSimplePermissionDialog,
-                    child: const Text('Help', style: TextStyle(fontSize: 12)),
+                    onPressed: () {
+                      _hasShownPermissionDialog = false;
+                      _showNativePermissionDialog();
+                    },
+                    child: const Text('Enable', style: TextStyle(fontSize: 12)),
                   ),
                 ],
               ),
@@ -268,7 +259,7 @@ class _LedgerScreenState extends State<LedgerScreen> {
             ),
           ),
 
-          // Demo data notice
+          // Demo data notice (only if no permission)
           if (_permissionStatus != SmsPermissionResult.granted)
             Container(
               margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -326,7 +317,7 @@ class _LedgerScreenState extends State<LedgerScreen> {
                         ),
                       )
                     : RefreshIndicator(
-                        onRefresh: _loadTransactions,
+                        onRefresh: _checkPermissionAndLoad,
                         child: ListView.builder(
                           itemCount: _filteredTransactions.length,
                           itemBuilder: (context, index) {

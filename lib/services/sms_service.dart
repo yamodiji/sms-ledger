@@ -1,11 +1,8 @@
 import 'package:another_telephony/telephony.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter/services.dart';
 import '../models/transaction.dart';
 
 class SmsService {
   final Telephony telephony = Telephony.instance;
-  static const platform = MethodChannel('sms_ledger/permissions');
 
   // Keywords for identifying transaction messages
   static const List<String> debitKeywords = [
@@ -30,87 +27,57 @@ class SmsService {
     'transfer',
   ];
 
-  /// Request SMS permission using proper Android system
+  /// Request SMS permission using the standard Android permission dialog
+  /// This will show the original dialog with "Allow while using the app" and "Don't allow"
   Future<bool> requestSmsPermission() async {
     try {
-      // First try the telephony package approach
-      final bool? telephonyResult = await telephony.requestPhoneAndSmsPermissions;
-      if (telephonyResult == true) {
+      // Check if permission is already granted
+      bool? permissionsGranted = await telephony.requestPhoneAndSmsPermissions;
+      
+      if (permissionsGranted == true) {
         return true;
       }
-
-      // If that fails, try platform channel approach
-      try {
-        final bool result = await platform.invokeMethod('requestSmsPermission');
-        return result;
-      } catch (e) {
-        // Fallback to telephony result
-        return telephonyResult == true;
-      }
+      
+      // If not granted, the system will show the standard permission dialog
+      // with "Allow while using the app" and "Don't allow" options
+      return false;
     } catch (e) {
       return false;
     }
   }
 
-  /// Check if SMS permission is already granted
-  Future<bool> checkSmsPermission() async {
+  /// Check if SMS permission is granted
+  Future<bool> hasPermission() async {
     try {
-      // Try platform channel first
-      try {
-        final bool result = await platform.invokeMethod('checkSmsPermission');
-        return result;
-      } catch (e) {
-        // Fallback to telephony test
-        await telephony.getInboxSms(
-          columns: [SmsColumn.ADDRESS],
-          filter: SmsFilter.where(SmsColumn.DATE)
-              .greaterThan(DateTime.now().subtract(const Duration(days: 1)).millisecondsSinceEpoch.toString()),
-        );
-        return true;
-      }
+      return await telephony.requestPhoneAndSmsPermissions ?? false;
     } catch (e) {
       return false;
     }
   }
 
-  /// Open app settings for manual permission grant
-  Future<void> openAppSettings() async {
+  /// Get SMS transactions from the device
+  Future<List<Transaction>> getTransactions({int days = 30}) async {
     try {
-      await platform.invokeMethod('openAppSettings');
-    } catch (e) {
-      // Silently fail if platform channel not available
-    }
-  }
-
-  Future<List<Transaction>> getTransactions() async {
-    final prefs = await SharedPreferences.getInstance();
-    final daysRange = prefs.getInt('transaction_days_range') ?? 30;
-    
-    // Check if we have permission
-    final hasPermission = await checkSmsPermission();
-    
-    // If no permission, try to request it
-    if (!hasPermission) {
-      final granted = await requestSmsPermission();
-      if (!granted) {
-        // Return sample data if permission denied
-        return getSampleTransactions();
+      // Check permission first
+      bool hasPermission = await this.hasPermission();
+      if (!hasPermission) {
+        // Return demo data if no permission
+        return _getDemoTransactions();
       }
-    }
 
-    final DateTime cutoffDate = DateTime.now().subtract(Duration(days: daysRange));
-    
-    try {
-      final List<SmsMessage> messages = await telephony.getInboxSms(
+      // Get SMS messages from the specified number of days
+      final DateTime fromDate = DateTime.now().subtract(Duration(days: days));
+      
+      List<SmsMessage> messages = await telephony.getInboxSms(
         columns: [SmsColumn.ADDRESS, SmsColumn.BODY, SmsColumn.DATE],
         filter: SmsFilter.where(SmsColumn.DATE)
-            .greaterThan(cutoffDate.millisecondsSinceEpoch.toString()),
+            .greaterThan(fromDate.millisecondsSinceEpoch.toString()),
       );
 
-      final List<Transaction> transactions = [];
-
-      for (final message in messages) {
-        final transaction = _parseTransaction(message);
+      List<Transaction> transactions = [];
+      
+      for (SmsMessage message in messages) {
+        Transaction? transaction = _parseTransaction(message);
         if (transaction != null) {
           transactions.add(transaction);
         }
@@ -121,115 +88,128 @@ class SmsService {
       
       return transactions;
     } catch (e) {
-      // Error reading SMS messages - return sample data for demo
-      return getSampleTransactions();
+      // Return demo data on error
+      return _getDemoTransactions();
     }
   }
 
+  /// Parse SMS message into transaction
   Transaction? _parseTransaction(SmsMessage message) {
-    final String body = message.body?.toLowerCase() ?? '';
-    final String sender = message.address ?? 'Unknown';
-    
-    // Check if message contains transaction keywords
-    final bool isDebit = debitKeywords.any((keyword) => body.contains(keyword));
-    final bool isCredit = creditKeywords.any((keyword) => body.contains(keyword));
-    
-    if (!isDebit && !isCredit) {
-      return null; // Not a transaction message
-    }
+    try {
+      String body = message.body ?? '';
+      String sender = message.address ?? 'Unknown';
+      DateTime date = DateTime.fromMillisecondsSinceEpoch(message.date ?? 0);
 
-    // Extract amount using regex
-    final RegExp amountRegex = RegExp(r'(?:rs\.?|inr|₹)\s*(\d+(?:,\d+)*(?:\.\d{2})?)', caseSensitive: false);
-    final Match? match = amountRegex.firstMatch(body);
-    
-    if (match == null) {
-      return null; // No amount found
-    }
+      // Check if it's a transaction message
+      bool isDebit = debitKeywords.any((keyword) => 
+          body.toLowerCase().contains(keyword.toLowerCase()));
+      bool isCredit = creditKeywords.any((keyword) => 
+          body.toLowerCase().contains(keyword.toLowerCase()));
 
-    final String amountStr = match.group(1)!.replaceAll(',', '');
-    final double amount = double.tryParse(amountStr) ?? 0.0;
-    
-    if (amount == 0.0) {
-      return null; // Invalid amount
-    }
+      if (!isDebit && !isCredit) {
+        return null; // Not a transaction message
+      }
 
-    // Determine bank from sender
-    final String bank = _getBankFromSender(sender);
-    
-    return Transaction(
-      id: message.id?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString(),
-      amount: amount,
-      isCredit: isCredit,
-      sender: sender,
-      bank: bank,
-      date: DateTime.fromMillisecondsSinceEpoch(message.date ?? DateTime.now().millisecondsSinceEpoch),
-      description: message.body ?? '',
-    );
+      // Extract amount using regex
+      double? amount = _extractAmount(body);
+      if (amount == null) {
+        return null; // No amount found
+      }
+
+      // Determine bank from sender
+      String bank = _extractBank(sender);
+
+      return Transaction(
+        id: message.id?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString(),
+        sender: sender,
+        date: date,
+        amount: amount,
+        isCredit: isCredit,
+        bank: bank,
+        description: body,
+      );
+    } catch (e) {
+      return null;
+    }
   }
 
-  String _getBankFromSender(String sender) {
-    final String lowerSender = sender.toLowerCase();
-    
-    if (lowerSender.contains('hdfc')) return 'HDFC';
-    if (lowerSender.contains('icici')) return 'ICICI';
-    if (lowerSender.contains('sbi')) return 'SBI';
-    if (lowerSender.contains('axis')) return 'Axis';
-    if (lowerSender.contains('kotak')) return 'Kotak';
-    if (lowerSender.contains('pnb')) return 'PNB';
-    if (lowerSender.contains('bob')) return 'BOB';
-    if (lowerSender.contains('canara')) return 'Canara';
-    if (lowerSender.contains('union')) return 'Union';
-    if (lowerSender.contains('indian')) return 'Indian';
-    
-    return 'Other';
+  /// Extract amount from SMS text
+  double? _extractAmount(String text) {
+    // Common patterns for amounts in Indian SMS
+    List<RegExp> patterns = [
+      RegExp(r'(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]{2})?)', caseSensitive: false),
+      RegExp(r'([0-9,]+(?:\.[0-9]{2})?)\s*(?:rs\.?|inr|₹)', caseSensitive: false),
+      RegExp(r'amount\s*(?:of\s*)?(?:rs\.?|inr|₹)?\s*([0-9,]+(?:\.[0-9]{2})?)', caseSensitive: false),
+      RegExp(r'([0-9,]+(?:\.[0-9]{2})?)', caseSensitive: false),
+    ];
+
+    for (RegExp pattern in patterns) {
+      Match? match = pattern.firstMatch(text);
+      if (match != null) {
+        String amountStr = match.group(1)!.replaceAll(',', '');
+        double? amount = double.tryParse(amountStr);
+        if (amount != null && amount > 0) {
+          return amount;
+        }
+      }
+    }
+    return null;
   }
 
-  List<Transaction> getSampleTransactions() {
+  /// Extract bank name from sender
+  String _extractBank(String sender) {
+    String senderLower = sender.toLowerCase();
+    
+    if (senderLower.contains('hdfc')) return 'HDFC Bank';
+    if (senderLower.contains('icici')) return 'ICICI Bank';
+    if (senderLower.contains('sbi')) return 'State Bank of India';
+    if (senderLower.contains('axis')) return 'Axis Bank';
+    if (senderLower.contains('kotak')) return 'Kotak Bank';
+    if (senderLower.contains('paytm')) return 'Paytm';
+    if (senderLower.contains('phonepe')) return 'PhonePe';
+    if (senderLower.contains('gpay') || senderLower.contains('googlepay')) return 'Google Pay';
+    
+    return 'Other Bank';
+  }
+
+  /// Get demo transactions for testing
+  List<Transaction> _getDemoTransactions() {
     return [
       Transaction(
         id: '1',
-        amount: 2500.00,
-        isCredit: false,
         sender: 'HDFC-BANK',
-        bank: 'HDFC',
         date: DateTime.now().subtract(const Duration(hours: 2)),
-        description: 'Amount debited from your account for UPI transaction',
+        amount: 500.00,
+        isCredit: false,
+        bank: 'HDFC Bank',
+        description: 'Amount debited: Rs.500.00 from A/c XX1234 on 15-Jan-25. Available balance: Rs.15,000.00',
       ),
       Transaction(
         id: '2',
-        amount: 5000.00,
-        isCredit: true,
         sender: 'ICICI-BANK',
-        bank: 'ICICI',
         date: DateTime.now().subtract(const Duration(days: 1)),
-        description: 'Amount credited to your account - salary transfer',
+        amount: 2500.00,
+        isCredit: true,
+        bank: 'ICICI Bank',
+        description: 'Amount credited: Rs.2,500.00 to A/c XX5678 on 14-Jan-25. Available balance: Rs.17,500.00',
       ),
       Transaction(
         id: '3',
+        sender: 'SBI',
+        date: DateTime.now().subtract(const Duration(days: 2)),
         amount: 150.00,
         isCredit: false,
-        sender: 'SBI-BANK',
-        bank: 'SBI',
-        date: DateTime.now().subtract(const Duration(days: 2)),
-        description: 'ATM withdrawal transaction completed',
+        bank: 'State Bank of India',
+        description: 'Amount debited: Rs.150.00 from A/c XX9012 on 13-Jan-25. Available balance: Rs.15,000.00',
       ),
       Transaction(
         id: '4',
-        amount: 1200.00,
-        isCredit: true,
         sender: 'AXIS-BANK',
-        bank: 'Axis',
         date: DateTime.now().subtract(const Duration(days: 3)),
-        description: 'Cashback credited for online purchase',
-      ),
-      Transaction(
-        id: '5',
-        amount: 800.00,
-        isCredit: false,
-        sender: 'HDFC-BANK',
-        bank: 'HDFC',
-        date: DateTime.now().subtract(const Duration(days: 4)),
-        description: 'Bill payment transaction successful',
+        amount: 1000.00,
+        isCredit: true,
+        bank: 'Axis Bank',
+        description: 'Amount credited: Rs.1,000.00 to A/c XX3456 on 12-Jan-25. Available balance: Rs.15,150.00',
       ),
     ];
   }

@@ -16,11 +16,44 @@ class _LedgerScreenState extends State<LedgerScreen> {
   bool _isLoading = true;
   bool _showExpenses = true;
   String _errorMessage = '';
+  bool _hasPermission = false;
+  bool _permissionRequested = false;
 
   @override
   void initState() {
     super.initState();
-    _loadTransactions();
+    _checkPermissionAndLoad();
+  }
+
+  Future<void> _checkPermissionAndLoad() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = '';
+    });
+
+    try {
+      // Check if we have permission
+      final hasPermission = await _smsService.checkSmsPermission();
+      setState(() {
+        _hasPermission = hasPermission;
+      });
+
+      if (hasPermission) {
+        await _loadTransactions();
+      } else {
+        // Load sample data if no permission
+        final sampleTransactions = _smsService.getSampleTransactions();
+        setState(() {
+          _transactions = sampleTransactions;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Error checking permissions: $e';
+        _isLoading = false;
+      });
+    }
   }
 
   Future<void> _loadTransactions() async {
@@ -43,6 +76,62 @@ class _LedgerScreenState extends State<LedgerScreen> {
     }
   }
 
+  Future<void> _requestPermission() async {
+    setState(() {
+      _permissionRequested = true;
+    });
+
+    try {
+      final granted = await _smsService.requestSmsPermission();
+      if (granted) {
+        setState(() {
+          _hasPermission = true;
+        });
+        await _loadTransactions();
+      } else {
+        setState(() {
+          _permissionRequested = false;
+        });
+        _showPermissionDeniedDialog();
+      }
+    } catch (e) {
+      setState(() {
+        _permissionRequested = false;
+        _errorMessage = 'Error requesting permission: $e';
+      });
+    }
+  }
+
+  void _showPermissionDeniedDialog() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('SMS Permission Required'),
+          content: const Text(
+            'This app needs SMS permission to read your bank transaction messages and create a financial ledger. '
+            'You can grant permission in app settings or continue with demo data.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: const Text('Use Demo Data'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _smsService.openAppSettings();
+              },
+              child: const Text('Open Settings'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   List<Transaction> get _filteredTransactions {
     return _transactions.where((transaction) {
       return _showExpenses ? !transaction.isCredit : transaction.isCredit;
@@ -62,12 +151,39 @@ class _LedgerScreenState extends State<LedgerScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _loadTransactions,
+            onPressed: _hasPermission ? _loadTransactions : _checkPermissionAndLoad,
           ),
         ],
       ),
       body: Column(
         children: [
+          // Permission banner (only if no permission)
+          if (!_hasPermission)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              color: Colors.blue.shade50,
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.blue.shade700),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Grant SMS permission to see your real bank transactions',
+                      style: TextStyle(color: Colors.blue.shade700, fontSize: 13),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: _permissionRequested ? null : _requestPermission,
+                    child: Text(
+                      _permissionRequested ? 'Requesting...' : 'Grant Permission',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          
           // Toggle Switch
           Container(
             padding: const EdgeInsets.all(16.0),
@@ -136,6 +252,33 @@ class _LedgerScreenState extends State<LedgerScreen> {
               ],
             ),
           ),
+
+          // Demo data notice (only if no permission)
+          if (!_hasPermission)
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.amber.shade200),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.visibility, color: Colors.amber.shade700, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Showing demo transactions. Grant SMS permission to see your real bank transactions.',
+                      style: TextStyle(
+                        color: Colors.amber.shade700,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           
           const SizedBox(height: 16),
           
@@ -164,7 +307,7 @@ class _LedgerScreenState extends State<LedgerScreen> {
                             ),
                             const SizedBox(height: 16),
                             ElevatedButton(
-                              onPressed: _loadTransactions,
+                              onPressed: _checkPermissionAndLoad,
                               child: const Text('Retry'),
                             ),
                           ],
@@ -190,7 +333,9 @@ class _LedgerScreenState extends State<LedgerScreen> {
                                 ),
                                 const SizedBox(height: 8),
                                 Text(
-                                  'Transactions will appear here when SMS messages are detected',
+                                  _hasPermission 
+                                    ? 'Transactions will appear here when SMS messages are detected'
+                                    : 'Grant SMS permission to see your real transactions',
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
                                     fontSize: 14,

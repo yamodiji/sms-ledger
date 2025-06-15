@@ -1,9 +1,11 @@
 import 'package:another_telephony/telephony.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/services.dart';
 import '../models/transaction.dart';
 
 class SmsService {
   final Telephony telephony = Telephony.instance;
+  static const platform = MethodChannel('sms_ledger/permissions');
 
   // Keywords for identifying transaction messages
   static const List<String> debitKeywords = [
@@ -28,14 +30,23 @@ class SmsService {
     'transfer',
   ];
 
-  /// Request SMS permission using native Android dialog
-  /// This is the same approach that working apps like Finart use
+  /// Request SMS permission using proper Android system
   Future<bool> requestSmsPermission() async {
     try {
-      // Use the telephony package's built-in permission request
-      // This triggers the original Android permission dialog
-      final bool? hasPermission = await telephony.requestPhoneAndSmsPermissions;
-      return hasPermission == true;
+      // First try the telephony package approach
+      final bool? telephonyResult = await telephony.requestPhoneAndSmsPermissions;
+      if (telephonyResult == true) {
+        return true;
+      }
+
+      // If that fails, try platform channel approach
+      try {
+        final bool result = await platform.invokeMethod('requestSmsPermission');
+        return result;
+      } catch (e) {
+        // Fallback to telephony result
+        return telephonyResult == true;
+      }
     } catch (e) {
       return false;
     }
@@ -44,15 +55,30 @@ class SmsService {
   /// Check if SMS permission is already granted
   Future<bool> checkSmsPermission() async {
     try {
-      // Try to access SMS to test if permission is granted
-      await telephony.getInboxSms(
-        columns: [SmsColumn.ADDRESS],
-        filter: SmsFilter.where(SmsColumn.DATE)
-            .greaterThan(DateTime.now().subtract(const Duration(days: 1)).millisecondsSinceEpoch.toString()),
-      );
-      return true;
+      // Try platform channel first
+      try {
+        final bool result = await platform.invokeMethod('checkSmsPermission');
+        return result;
+      } catch (e) {
+        // Fallback to telephony test
+        await telephony.getInboxSms(
+          columns: [SmsColumn.ADDRESS],
+          filter: SmsFilter.where(SmsColumn.DATE)
+              .greaterThan(DateTime.now().subtract(const Duration(days: 1)).millisecondsSinceEpoch.toString()),
+        );
+        return true;
+      }
     } catch (e) {
       return false;
+    }
+  }
+
+  /// Open app settings for manual permission grant
+  Future<void> openAppSettings() async {
+    try {
+      await platform.invokeMethod('openAppSettings');
+    } catch (e) {
+      // Silently fail if platform channel not available
     }
   }
 

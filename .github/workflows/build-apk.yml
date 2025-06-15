@@ -48,7 +48,7 @@ jobs:
         echo "org.gradle.daemon=false" >> ~/.gradle/gradle.properties
         echo "org.gradle.parallel=false" >> ~/.gradle/gradle.properties
         echo "org.gradle.configureondemand=false" >> ~/.gradle/gradle.properties
-        echo "org.gradle.jvmargs=-Xmx2048m -XX:MaxPermSize=512m -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8" >> ~/.gradle/gradle.properties
+        echo "org.gradle.jvmargs=-Xmx2048m -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8" >> ~/.gradle/gradle.properties
 
     - name: Build APK with retry
       run: |

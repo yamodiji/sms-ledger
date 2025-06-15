@@ -14,6 +14,7 @@ class SmsService {
     'purchase',
     'transaction',
     'charged',
+    'used',
   ];
 
   static const List<String> creditKeywords = [
@@ -25,14 +26,34 @@ class SmsService {
     'cashback',
     'salary',
     'transfer',
+    'added',
   ];
 
-  // Transaction type keywords
+  // Transaction type keywords - ORDER MATTERS (most specific first)
   static const Map<String, List<String>> transactionTypeKeywords = {
+    'CREDIT_CARD': [
+      'credit card',
+      'credit-card',
+      'cc ending',
+      'cc****',
+      'cc xxxx',
+      'via credit card',
+      'using credit card',
+      'through credit card',
+      'on credit card',
+      'at credit card',
+      'spent on cc',
+      'cc transaction',
+      'credit card transaction',
+      'cc purchase',
+      'credit card purchase',
+    ],
     'DEBIT_CARD': [
       'debit card',
       'debit-card',
-      'dc',
+      'dc ending',
+      'dc****',
+      'dc xxxx',
       'card ending',
       'card no',
       'card****',
@@ -40,14 +61,13 @@ class SmsService {
       'via debit card',
       'using debit card',
       'through debit card',
-    ],
-    'CREDIT_CARD': [
-      'credit card',
-      'credit-card',
-      'cc',
-      'via credit card',
-      'using credit card',
-      'through credit card',
+      'on debit card',
+      'at debit card',
+      'spent on dc',
+      'dc transaction',
+      'debit card transaction',
+      'dc purchase',
+      'debit card purchase',
     ],
     'UPI': [
       'upi',
@@ -64,10 +84,12 @@ class SmsService {
       'bhim',
       'amazon pay',
       'mobikwik',
+      'upi payment',
+      'unified payments',
     ],
   };
 
-  // Full bank name mapping
+  // Comprehensive bank name mapping with SMS patterns
   static const Map<String, String> bankNameMapping = {
     // HDFC variations
     'hdfc': 'HDFC Bank',
@@ -75,6 +97,8 @@ class SmsService {
     'hdfc bank': 'HDFC Bank',
     'hd-hdfc': 'HDFC Bank',
     'ad-hdfc': 'HDFC Bank',
+    'vm-hdfc': 'HDFC Bank',
+    'tm-hdfc': 'HDFC Bank',
     
     // ICICI variations
     'icici': 'ICICI Bank',
@@ -82,6 +106,7 @@ class SmsService {
     'icici bank': 'ICICI Bank',
     'ad-icici': 'ICICI Bank',
     'vm-icici': 'ICICI Bank',
+    'tm-icici': 'ICICI Bank',
     
     // SBI variations
     'sbi': 'State Bank of India',
@@ -89,7 +114,9 @@ class SmsService {
     'sbiinb': 'State Bank of India',
     'ad-sbibnk': 'State Bank of India',
     'vm-sbibnk': 'State Bank of India',
+    'tm-sbibnk': 'State Bank of India',
     'state bank': 'State Bank of India',
+    'state bank of india': 'State Bank of India',
     
     // Axis variations
     'axis': 'Axis Bank',
@@ -97,63 +124,136 @@ class SmsService {
     'axis bank': 'Axis Bank',
     'ad-axis': 'Axis Bank',
     'vm-axis': 'Axis Bank',
+    'tm-axis': 'Axis Bank',
     
-    // Other major banks
+    // Kotak variations
     'kotak': 'Kotak Mahindra Bank',
     'kotakbk': 'Kotak Mahindra Bank',
     'kotak mahindra': 'Kotak Mahindra Bank',
+    'kotak mahindra bank': 'Kotak Mahindra Bank',
+    'ad-kotak': 'Kotak Mahindra Bank',
+    'vm-kotak': 'Kotak Mahindra Bank',
     
+    // PNB variations
     'pnb': 'Punjab National Bank',
     'punjab national': 'Punjab National Bank',
+    'punjab national bank': 'Punjab National Bank',
+    'ad-pnbbk': 'Punjab National Bank',
+    'vm-pnbbk': 'Punjab National Bank',
     
+    // Canara variations
     'canara': 'Canara Bank',
     'canarabk': 'Canara Bank',
     'canara bank': 'Canara Bank',
+    'ad-canara': 'Canara Bank',
+    'vm-canara': 'Canara Bank',
     
+    // Bank of Baroda variations
     'bob': 'Bank of Baroda',
     'baroda': 'Bank of Baroda',
     'bank of baroda': 'Bank of Baroda',
+    'ad-baroda': 'Bank of Baroda',
+    'vm-baroda': 'Bank of Baroda',
     
+    // Union Bank variations
     'union': 'Union Bank of India',
     'unionbk': 'Union Bank of India',
     'union bank': 'Union Bank of India',
+    'union bank of india': 'Union Bank of India',
+    'ad-union': 'Union Bank of India',
+    'vm-union': 'Union Bank of India',
     
+    // IDBI variations
     'idbi': 'IDBI Bank',
     'idbibk': 'IDBI Bank',
     'idbi bank': 'IDBI Bank',
+    'ad-idbi': 'IDBI Bank',
+    'vm-idbi': 'IDBI Bank',
     
+    // YES Bank variations
     'yes': 'YES Bank',
     'yesbk': 'YES Bank',
     'yes bank': 'YES Bank',
+    'ad-yesbnk': 'YES Bank',
+    'vm-yesbnk': 'YES Bank',
     
+    // IndusInd variations
     'indusind': 'IndusInd Bank',
     'indusbk': 'IndusInd Bank',
     'indusind bank': 'IndusInd Bank',
+    'ad-indus': 'IndusInd Bank',
+    'vm-indus': 'IndusInd Bank',
     
+    // Federal Bank variations
     'federal': 'Federal Bank',
     'federalbk': 'Federal Bank',
     'federal bank': 'Federal Bank',
+    'ad-federal': 'Federal Bank',
+    'vm-federal': 'Federal Bank',
     
+    // RBL Bank variations
     'rbl': 'RBL Bank',
     'rblbk': 'RBL Bank',
     'rbl bank': 'RBL Bank',
+    'ad-rbl': 'RBL Bank',
+    'vm-rbl': 'RBL Bank',
     
+    // Bandhan Bank variations
     'bandhan': 'Bandhan Bank',
     'bandhanbk': 'Bandhan Bank',
     'bandhan bank': 'Bandhan Bank',
+    'ad-bandhan': 'Bandhan Bank',
+    'vm-bandhan': 'Bandhan Bank',
+    
+    // DBS Bank variations (ADDED)
+    'dbs': 'DBS Bank',
+    'dbsbank': 'DBS Bank',
+    'dbs bank': 'DBS Bank',
+    'ad-dbs': 'DBS Bank',
+    'vm-dbs': 'DBS Bank',
+    'tm-dbs': 'DBS Bank',
+    
+    // Central Bank of India variations (ADDED)
+    'central': 'Central Bank of India',
+    'centralbank': 'Central Bank of India',
+    'central bank': 'Central Bank of India',
+    'central bank of india': 'Central Bank of India',
+    'ad-central': 'Central Bank of India',
+    'vm-central': 'Central Bank of India',
+    'tm-central': 'Central Bank of India',
+    'cbi': 'Central Bank of India',
+    'ad-cbi': 'Central Bank of India',
+    'vm-cbi': 'Central Bank of India',
+    
+    // Additional banks
+    'indian': 'Indian Bank',
+    'indian bank': 'Indian Bank',
+    'ad-indian': 'Indian Bank',
+    'vm-indian': 'Indian Bank',
+    
+    'boi': 'Bank of India',
+    'bank of india': 'Bank of India',
+    'ad-boi': 'Bank of India',
+    'vm-boi': 'Bank of India',
+    
+    'uco': 'UCO Bank',
+    'uco bank': 'UCO Bank',
+    'ad-uco': 'UCO Bank',
+    'vm-uco': 'UCO Bank',
+    
+    'syndicate': 'Syndicate Bank',
+    'syndicate bank': 'Syndicate Bank',
+    'ad-syndicate': 'Syndicate Bank',
+    'vm-syndicate': 'Syndicate Bank',
   };
 
   /// Request SMS permission using the standard Android permission dialog
-  /// This will show the original dialog with "Allow while using the app" and "Don't allow"
   Future<bool> requestSmsPermission() async {
     try {
-      // Check if permission is already granted
       final hasPermission = await telephony.isSmsCapable ?? false;
       if (hasPermission) {
         return true;
       }
-
-      // Request permission using telephony package
       return await telephony.requestPhoneAndSmsPermissions ?? false;
     } catch (e) {
       return false;
@@ -184,7 +284,6 @@ class SmsService {
 
       return transactions;
     } catch (e) {
-      // Return demo data for testing
       return _getDemoTransactions();
     }
   }
@@ -192,6 +291,7 @@ class SmsService {
   /// Parse SMS message into transaction
   Transaction? _parseTransaction(SmsMessage message) {
     final body = message.body?.toLowerCase() ?? '';
+    final originalBody = message.body ?? '';
     final sender = message.address ?? '';
     final date = DateTime.fromMillisecondsSinceEpoch(message.date ?? 0);
 
@@ -205,11 +305,11 @@ class SmsService {
     final amount = _extractAmount(body);
     if (amount == null) return null;
 
-    // Extract full bank name
-    final bankName = _extractBankName(sender, body);
+    // Extract full bank name from SMS content first, then sender
+    final bankName = _extractBankName(sender, originalBody);
     
-    // Detect transaction type
-    final transactionType = _detectTransactionType(body);
+    // Detect transaction type (check credit card first, then debit card)
+    final transactionType = _detectTransactionType(originalBody);
 
     return Transaction(
       id: '${message.date}_${sender.hashCode}',
@@ -218,19 +318,20 @@ class SmsService {
       amount: amount,
       isCredit: isCredit,
       bank: bankName,
-      description: message.body ?? '',
+      description: originalBody,
       transactionType: transactionType,
     );
   }
 
   /// Extract amount from SMS body
   double? _extractAmount(String body) {
-    // Common patterns for amount extraction
     final patterns = [
       r'rs\.?\s*(\d+(?:,\d+)*(?:\.\d{2})?)',
       r'inr\s*(\d+(?:,\d+)*(?:\.\d{2})?)',
       r'amount\s*rs\.?\s*(\d+(?:,\d+)*(?:\.\d{2})?)',
       r'(\d+(?:,\d+)*(?:\.\d{2})?)\s*(?:rs|inr)',
+      r'₹\s*(\d+(?:,\d+)*(?:\.\d{2})?)',
+      r'(\d+(?:,\d+)*(?:\.\d{2})?)\s*₹',
     ];
 
     for (final pattern in patterns) {
@@ -238,46 +339,81 @@ class SmsService {
       final match = regex.firstMatch(body);
       if (match != null) {
         final amountStr = match.group(1)?.replaceAll(',', '') ?? '';
-        return double.tryParse(amountStr);
+        final amount = double.tryParse(amountStr);
+        if (amount != null && amount > 0) {
+          return amount;
+        }
       }
     }
-
     return null;
   }
 
-  /// Extract full bank name from sender and body
+  /// Extract full bank name from SMS content and sender
   String _extractBankName(String sender, String body) {
-    // First try to extract from sender
+    final bodyLower = body.toLowerCase();
     final senderLower = sender.toLowerCase();
     
-    // Check direct mapping
+    // First, try to extract bank name from SMS body content
+    // Look for patterns like "HDFC Bank", "State Bank of India", etc.
+    for (final entry in bankNameMapping.entries) {
+      if (bodyLower.contains(entry.key)) {
+        return entry.value;
+      }
+    }
+    
+    // Then try sender
     for (final entry in bankNameMapping.entries) {
       if (senderLower.contains(entry.key)) {
         return entry.value;
       }
     }
 
-    // Try to extract from message body
-    for (final entry in bankNameMapping.entries) {
-      if (body.contains(entry.key)) {
-        return entry.value;
+    // Try to extract bank name from common SMS patterns
+    final bankPatterns = [
+      r'from\s+([a-zA-Z\s]+)\s+bank',
+      r'([a-zA-Z\s]+)\s+bank\s+a/c',
+      r'([a-zA-Z\s]+)\s+bank\s+account',
+      r'dear\s+([a-zA-Z\s]+)\s+bank',
+      r'([a-zA-Z\s]+)\s+bank\s+customer',
+    ];
+
+    for (final pattern in bankPatterns) {
+      final regex = RegExp(pattern, caseSensitive: false);
+      final match = regex.firstMatch(body);
+      if (match != null) {
+        final bankName = match.group(1)?.trim() ?? '';
+        if (bankName.isNotEmpty) {
+          // Check if this extracted name matches our mapping
+          final mappedName = bankNameMapping[bankName.toLowerCase()];
+          if (mappedName != null) {
+            return mappedName;
+          }
+          // Return the extracted name with proper formatting
+          return '${bankName.split(' ').map((word) => word.isNotEmpty ? word[0].toUpperCase() + word.substring(1) : '').join(' ')} Bank';
+        }
       }
     }
 
-    // If no match found, try to clean up sender name
-    String cleanSender = sender.replaceAll(RegExp(r'[^a-zA-Z\s]'), '').trim();
-    if (cleanSender.isNotEmpty) {
-      return cleanSender;
+    // If no match found, clean up sender name
+    String cleanSender = sender.replaceAll(RegExp(r'[^a-zA-Z\s-]'), '').trim();
+    if (cleanSender.isNotEmpty && cleanSender.length > 2) {
+      // Convert to proper case
+      return cleanSender.split(' ').map((word) => 
+        word.isNotEmpty ? word[0].toUpperCase() + word.substring(1).toLowerCase() : ''
+      ).join(' ');
     }
 
     return 'Unknown Bank';
   }
 
-  /// Detect transaction type from SMS body
+  /// Detect transaction type from SMS body - CHECK CREDIT CARD FIRST
   String _detectTransactionType(String body) {
+    final bodyLower = body.toLowerCase();
+    
+    // Check in order of specificity - CREDIT CARD FIRST
     for (final entry in transactionTypeKeywords.entries) {
       for (final keyword in entry.value) {
-        if (body.contains(keyword)) {
+        if (bodyLower.contains(keyword)) {
           return entry.key;
         }
       }
@@ -321,13 +457,23 @@ class SmsService {
       ),
       Transaction(
         id: 'demo_4',
-        sender: 'SBI',
+        sender: 'DBS-BANK',
         date: now.subtract(const Duration(days: 2)),
         amount: 5000.00,
         isCredit: true,
-        bank: 'State Bank of India',
-        description: 'Rs.5000.00 credited to A/c **3456 salary credit. Balance: Rs.25000.00',
+        bank: 'DBS Bank',
+        description: 'Rs.5000.00 credited to your DBS Bank A/c **3456 salary credit. Balance: Rs.25000.00',
         transactionType: 'OTHER',
+      ),
+      Transaction(
+        id: 'demo_5',
+        sender: 'CENTRAL-BK',
+        date: now.subtract(const Duration(days: 3)),
+        amount: 1200.00,
+        isCredit: false,
+        bank: 'Central Bank of India',
+        description: 'Rs.1200.00 debited from Central Bank of India A/c **7890 via Credit Card. Balance: Rs.15000.00',
+        transactionType: 'CREDIT_CARD',
       ),
     ];
   }

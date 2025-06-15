@@ -37,27 +37,73 @@ class _LedgerScreenState extends State<LedgerScreen> {
       });
     } catch (e) {
       setState(() {
-        _errorMessage = 'Error loading transactions: $e';
+        _errorMessage = e.toString();
         _isLoading = false;
       });
     }
   }
 
-  Future<void> _requestPermission() async {
-    final granted = await _smsService.requestSmsPermission();
-    if (granted) {
-      _loadTransactions();
-    } else {
-      setState(() {
-        _errorMessage = 'SMS permission is required to read transaction messages';
-      });
-    }
-  }
-
-  List<Transaction> get _filteredTransactions {
+  List<Transaction> get filteredTransactions {
     return _transactions.where((transaction) {
       return _showExpenses ? !transaction.isCredit : transaction.isCredit;
     }).toList();
+  }
+
+  void _showPermissionHelp() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('SMS Permission Required'),
+          content: const SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'To read SMS transactions, this app needs SMS permission.',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                SizedBox(height: 16),
+                Text('For sideloaded apps (installed from APK), follow these steps:'),
+                SizedBox(height: 12),
+                Text('1. Go to Settings → Apps'),
+                Text('2. Find "SMS Ledger" app'),
+                Text('3. Tap the 3-dot menu (⋮) → "Allow restricted settings"'),
+                Text('4. Go to Permissions → SMS → Allow'),
+                SizedBox(height: 16),
+                Text(
+                  'Note: Apps from Play Store don\'t have this restriction.',
+                  style: TextStyle(fontStyle: FontStyle.italic),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Got it'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _requestPermission();
+              },
+              child: const Text('Try Again'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _requestPermission() async {
+    final hasPermission = await _smsService.requestSmsPermission();
+    if (hasPermission) {
+      _loadTransactions();
+    } else {
+      _showPermissionHelp();
+    }
   }
 
   @override
@@ -66,12 +112,6 @@ class _LedgerScreenState extends State<LedgerScreen> {
       appBar: AppBar(
         title: const Text('SMS Ledger'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadTransactions,
-          ),
-        ],
       ),
       body: Column(
         children: [
@@ -84,8 +124,8 @@ class _LedgerScreenState extends State<LedgerScreen> {
                 Text(
                   'Income',
                   style: TextStyle(
-                    fontWeight: _showExpenses ? FontWeight.normal : FontWeight.bold,
-                    color: _showExpenses ? Colors.grey : Colors.green,
+                    color: !_showExpenses ? Colors.green : Colors.grey,
+                    fontWeight: !_showExpenses ? FontWeight.bold : FontWeight.normal,
                   ),
                 ),
                 const SizedBox(width: 16),
@@ -103,95 +143,97 @@ class _LedgerScreenState extends State<LedgerScreen> {
                 Text(
                   'Expenses',
                   style: TextStyle(
-                    fontWeight: _showExpenses ? FontWeight.bold : FontWeight.normal,
                     color: _showExpenses ? Colors.red : Colors.grey,
+                    fontWeight: _showExpenses ? FontWeight.bold : FontWeight.normal,
                   ),
                 ),
               ],
             ),
           ),
-          
           // Content
           Expanded(
-            child: _buildContent(),
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _errorMessage.isNotEmpty
+                    ? Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(
+                              Icons.sms_failed,
+                              size: 64,
+                              color: Colors.orange,
+                            ),
+                            const SizedBox(height: 16),
+                            const Text(
+                              'SMS Permission Required',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            const Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 32),
+                              child: Text(
+                                'This app needs SMS permission to read transaction messages from your bank.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(color: Colors.grey),
+                              ),
+                            ),
+                            const SizedBox(height: 24),
+                            ElevatedButton.icon(
+                              onPressed: _requestPermission,
+                              icon: const Icon(Icons.security),
+                              label: const Text('Grant Permission'),
+                            ),
+                            const SizedBox(height: 12),
+                            TextButton(
+                              onPressed: _showPermissionHelp,
+                              child: const Text('Need Help?'),
+                            ),
+                          ],
+                        ),
+                      )
+                    : filteredTransactions.isEmpty
+                        ? Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  _showExpenses ? Icons.money_off : Icons.attach_money,
+                                  size: 64,
+                                  color: Colors.grey,
+                                ),
+                                const SizedBox(height: 16),
+                                Text(
+                                  _showExpenses ? 'No expenses found' : 'No income found',
+                                  style: const TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                const Text(
+                                  'Transaction messages will appear here',
+                                  style: TextStyle(color: Colors.grey),
+                                ),
+                              ],
+                            ),
+                          )
+                        : RefreshIndicator(
+                            onRefresh: _loadTransactions,
+                            child: ListView.builder(
+                              itemCount: filteredTransactions.length,
+                              itemBuilder: (context, index) {
+                                return TransactionItem(
+                                  transaction: filteredTransactions[index],
+                                );
+                              },
+                            ),
+                          ),
           ),
         ],
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _requestPermission,
-        tooltip: 'Request SMS Permission',
-        child: const Icon(Icons.sms),
-      ),
-    );
-  }
-
-  Widget _buildContent() {
-    if (_isLoading) {
-      return const Center(
-        child: CircularProgressIndicator(),
-      );
-    }
-
-    if (_errorMessage.isNotEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.error_outline,
-              size: 64,
-              color: Colors.grey[400],
-            ),
-            const SizedBox(height: 16),
-            Text(
-              _errorMessage,
-              style: const TextStyle(fontSize: 16),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: _requestPermission,
-              child: const Text('Grant SMS Permission'),
-            ),
-          ],
-        ),
-      );
-    }
-
-    final filteredTransactions = _filteredTransactions;
-
-    if (filteredTransactions.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.inbox_outlined,
-              size: 64,
-              color: Colors.grey[400],
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'No ${_showExpenses ? 'expenses' : 'income'} found',
-              style: const TextStyle(fontSize: 16),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Transaction messages will appear here',
-              style: TextStyle(color: Colors.grey),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return RefreshIndicator(
-      onRefresh: _loadTransactions,
-      child: ListView.builder(
-        itemCount: filteredTransactions.length,
-        itemBuilder: (context, index) {
-          return TransactionItem(transaction: filteredTransactions[index]);
-        },
       ),
     );
   }

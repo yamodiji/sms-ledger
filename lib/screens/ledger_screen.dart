@@ -15,38 +15,92 @@ class _LedgerScreenState extends State<LedgerScreen> {
   List<Transaction> _allTransactions = [];
   List<Transaction> _filteredTransactions = [];
   bool _isLoading = true;
+  bool _hasPermission = false;
+  bool _isUsingDummyData = false;
   final SmsService _smsService = SmsService();
 
   @override
   void initState() {
     super.initState();
-    _loadTransactions();
+    _checkPermissionAndLoadTransactions();
   }
 
-  Future<void> _loadTransactions() async {
+  Future<void> _checkPermissionAndLoadTransactions() async {
     setState(() {
       _isLoading = true;
     });
 
+    final hasPermission = await _smsService.checkSmsPermission();
+    setState(() {
+      _hasPermission = hasPermission;
+    });
+
+    if (hasPermission) {
+      await _loadRealTransactions();
+    } else {
+      await _loadDummyTransactions();
+    }
+  }
+
+  Future<void> _loadRealTransactions() async {
     try {
       List<Transaction> transactions = await _smsService.getTransactions();
       
-      if (transactions.isEmpty) {
-        transactions = _smsService.getSampleTransactions();
-      }
-
       setState(() {
         _allTransactions = transactions;
+        _isUsingDummyData = false;
         _filterTransactions();
         _isLoading = false;
       });
     } catch (e) {
-      setState(() {
-        _allTransactions = _smsService.getSampleTransactions();
-        _filterTransactions();
-        _isLoading = false;
-      });
+      await _loadDummyTransactions();
     }
+  }
+
+  Future<void> _loadDummyTransactions() async {
+    setState(() {
+      _allTransactions = _smsService.getSampleTransactions();
+      _isUsingDummyData = true;
+      _filterTransactions();
+      _isLoading = false;
+    });
+  }
+
+  Future<void> _requestPermission() async {
+    final granted = await _smsService.requestSmsPermission();
+    if (granted) {
+      await _checkPermissionAndLoadTransactions();
+    } else {
+      _showPermissionDialog();
+    }
+  }
+
+  void _showPermissionDialog() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('SMS Permission Required'),
+          content: const Text(
+            'This app needs SMS permission to read your transaction messages. '
+            'Please grant permission in app settings to see real transactions.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                await _smsService.openPermissionSettings();
+              },
+              child: const Text('Open Settings'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   void _filterTransactions() {
@@ -79,6 +133,43 @@ class _LedgerScreenState extends State<LedgerScreen> {
       ),
       body: Column(
         children: [
+          // Permission status banner
+          if (!_hasPermission || _isUsingDummyData)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              color: Colors.orange[100],
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.warning_amber,
+                    color: Colors.orange[800],
+                    size: 20,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _hasPermission 
+                          ? 'No SMS transactions found. Showing sample data.'
+                          : 'SMS permission required to read real transactions.',
+                      style: TextStyle(
+                        color: Colors.orange[800],
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                  if (!_hasPermission)
+                    TextButton(
+                      onPressed: _requestPermission,
+                      child: const Text(
+                        'Grant Permission',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          
           Container(
             padding: const EdgeInsets.all(16),
             child: Row(
@@ -173,7 +264,7 @@ class _LedgerScreenState extends State<LedgerScreen> {
                         ),
                       )
                     : RefreshIndicator(
-                        onRefresh: _loadTransactions,
+                        onRefresh: _checkPermissionAndLoadTransactions,
                         child: ListView.builder(
                           itemCount: _filteredTransactions.length,
                           itemBuilder: (context, index) {
@@ -186,6 +277,12 @@ class _LedgerScreenState extends State<LedgerScreen> {
           ),
         ],
       ),
+      floatingActionButton: !_hasPermission ? FloatingActionButton.extended(
+        onPressed: _requestPermission,
+        icon: const Icon(Icons.sms),
+        label: const Text('Enable SMS'),
+        backgroundColor: Colors.orange,
+      ) : null,
     );
   }
 

@@ -34,6 +34,15 @@ class SmsService {
     return status == PermissionStatus.granted;
   }
 
+  Future<bool> checkSmsPermission() async {
+    final status = await Permission.sms.status;
+    return status == PermissionStatus.granted;
+  }
+
+  Future<bool> openPermissionSettings() async {
+    return await openAppSettings();
+  }
+
   Future<List<Transaction>> getTransactions() async {
     final prefs = await SharedPreferences.getInstance();
     final daysRange = prefs.getInt('transaction_days_range') ?? 30;

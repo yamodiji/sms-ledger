@@ -29,67 +29,7 @@ class SmsService {
     'added',
   ];
 
-  // Transaction type keywords - ORDER MATTERS (most specific first)
-  static const Map<String, List<String>> transactionTypeKeywords = {
-    'CREDIT_CARD': [
-      'credit card',
-      'credit-card',
-      'cc ending',
-      'cc****',
-      'cc xxxx',
-      'via credit card',
-      'using credit card',
-      'through credit card',
-      'on credit card',
-      'at credit card',
-      'spent on cc',
-      'cc transaction',
-      'credit card transaction',
-      'cc purchase',
-      'credit card purchase',
-    ],
-    'DEBIT_CARD': [
-      'debit card',
-      'debit-card',
-      'dc ending',
-      'dc****',
-      'dc xxxx',
-      'card ending',
-      'card no',
-      'card****',
-      'card xxxx',
-      'via debit card',
-      'using debit card',
-      'through debit card',
-      'on debit card',
-      'at debit card',
-      'spent on dc',
-      'dc transaction',
-      'debit card transaction',
-      'dc purchase',
-      'debit card purchase',
-    ],
-    'UPI': [
-      'upi',
-      'via upi',
-      'using upi',
-      'through upi',
-      'upi id',
-      'upi ref',
-      'upi transaction',
-      'paytm',
-      'phonepe',
-      'googlepay',
-      'google pay',
-      'bhim',
-      'amazon pay',
-      'mobikwik',
-      'upi payment',
-      'unified payments',
-    ],
-  };
-
-  // Comprehensive bank name mapping with SMS patterns
+  // Comprehensive bank name mapping - extract from SMS content
   static const Map<String, String> bankNameMapping = {
     // HDFC variations
     'hdfc': 'HDFC Bank',
@@ -205,7 +145,7 @@ class SmsService {
     'ad-bandhan': 'Bandhan Bank',
     'vm-bandhan': 'Bandhan Bank',
     
-    // DBS Bank variations (ADDED)
+    // DBS Bank variations
     'dbs': 'DBS Bank',
     'dbsbank': 'DBS Bank',
     'dbs bank': 'DBS Bank',
@@ -213,7 +153,7 @@ class SmsService {
     'vm-dbs': 'DBS Bank',
     'tm-dbs': 'DBS Bank',
     
-    // Central Bank of India variations (ADDED)
+    // Central Bank of India variations
     'central': 'Central Bank of India',
     'centralbank': 'Central Bank of India',
     'central bank': 'Central Bank of India',
@@ -247,7 +187,7 @@ class SmsService {
     'vm-syndicate': 'Syndicate Bank',
   };
 
-  /// Request SMS permission using the standard Android permission dialog
+  /// Request SMS permission
   Future<bool> requestSmsPermission() async {
     try {
       final hasPermission = await telephony.isSmsCapable ?? false;
@@ -288,28 +228,28 @@ class SmsService {
     }
   }
 
-  /// Parse SMS message into transaction
+  /// Parse SMS message into transaction - INTELLIGENT PARSING
   Transaction? _parseTransaction(SmsMessage message) {
-    final body = message.body?.toLowerCase() ?? '';
     final originalBody = message.body ?? '';
+    final bodyLower = originalBody.toLowerCase();
     final sender = message.address ?? '';
     final date = DateTime.fromMillisecondsSinceEpoch(message.date ?? 0);
 
     // Check if it's a transaction message
-    final isDebit = debitKeywords.any((keyword) => body.contains(keyword));
-    final isCredit = creditKeywords.any((keyword) => body.contains(keyword));
+    final isDebit = debitKeywords.any((keyword) => bodyLower.contains(keyword));
+    final isCredit = creditKeywords.any((keyword) => bodyLower.contains(keyword));
     
     if (!isDebit && !isCredit) return null;
 
     // Extract amount
-    final amount = _extractAmount(body);
+    final amount = _extractAmount(bodyLower);
     if (amount == null) return null;
 
-    // Extract full bank name from SMS content first, then sender
-    final bankName = _extractBankName(sender, originalBody);
+    // INTELLIGENT bank name extraction from SMS content
+    final bankName = _intelligentBankExtraction(sender, originalBody);
     
-    // Detect transaction type (check credit card first, then debit card)
-    final transactionType = _detectTransactionType(originalBody);
+    // INTELLIGENT transaction type detection from actual SMS content
+    final transactionType = _intelligentTransactionTypeDetection(originalBody);
 
     return Transaction(
       id: '${message.date}_${sender.hashCode}',
@@ -321,6 +261,151 @@ class SmsService {
       description: originalBody,
       transactionType: transactionType,
     );
+  }
+
+  /// INTELLIGENT bank name extraction - reads actual SMS content
+  String _intelligentBankExtraction(String sender, String smsBody) {
+    final bodyLower = smsBody.toLowerCase();
+    final senderLower = sender.toLowerCase();
+    
+    // Method 1: Look for explicit bank mentions in SMS body
+    // Pattern: "HDFC Bank", "State Bank of India", "DBS Bank", etc.
+    final bankMentionPatterns = [
+      r'(hdfc\s+bank)',
+      r'(icici\s+bank)',
+      r'(state\s+bank\s+of\s+india)',
+      r'(axis\s+bank)',
+      r'(kotak\s+mahindra\s+bank)',
+      r'(punjab\s+national\s+bank)',
+      r'(canara\s+bank)',
+      r'(bank\s+of\s+baroda)',
+      r'(union\s+bank\s+of\s+india)',
+      r'(idbi\s+bank)',
+      r'(yes\s+bank)',
+      r'(indusind\s+bank)',
+      r'(federal\s+bank)',
+      r'(rbl\s+bank)',
+      r'(bandhan\s+bank)',
+      r'(dbs\s+bank)',
+      r'(central\s+bank\s+of\s+india)',
+      r'(indian\s+bank)',
+      r'(bank\s+of\s+india)',
+      r'(uco\s+bank)',
+      r'(syndicate\s+bank)',
+    ];
+
+    for (final pattern in bankMentionPatterns) {
+      final regex = RegExp(pattern, caseSensitive: false);
+      final match = regex.firstMatch(bodyLower);
+      if (match != null) {
+        final bankName = match.group(1)?.trim() ?? '';
+        final mappedName = bankNameMapping[bankName];
+        if (mappedName != null) {
+          return mappedName;
+        }
+      }
+    }
+
+    // Method 2: Look for bank name patterns in SMS content
+    final contentPatterns = [
+      r'dear\s+([a-zA-Z\s]+)\s+bank\s+customer',
+      r'([a-zA-Z\s]+)\s+bank\s+a/c',
+      r'([a-zA-Z\s]+)\s+bank\s+account',
+      r'from\s+([a-zA-Z\s]+)\s+bank',
+      r'your\s+([a-zA-Z\s]+)\s+bank',
+      r'([a-zA-Z\s]+)\s+bank\s+ltd',
+    ];
+
+    for (final pattern in contentPatterns) {
+      final regex = RegExp(pattern, caseSensitive: false);
+      final match = regex.firstMatch(smsBody);
+      if (match != null) {
+        final extractedName = match.group(1)?.trim().toLowerCase() ?? '';
+        if (extractedName.isNotEmpty) {
+          final mappedName = bankNameMapping[extractedName];
+          if (mappedName != null) {
+            return mappedName;
+          }
+        }
+      }
+    }
+
+    // Method 3: Check sender against bank mapping
+    for (final entry in bankNameMapping.entries) {
+      if (senderLower.contains(entry.key)) {
+        return entry.value;
+      }
+    }
+
+    // Method 4: Clean up sender name as fallback
+    String cleanSender = sender.replaceAll(RegExp(r'[^a-zA-Z\s-]'), '').trim();
+    if (cleanSender.isNotEmpty && cleanSender.length > 2) {
+      return cleanSender.split(' ').map((word) => 
+        word.isNotEmpty ? word[0].toUpperCase() + word.substring(1).toLowerCase() : ''
+      ).join(' ');
+    }
+
+    return 'Unknown Bank';
+  }
+
+  /// INTELLIGENT transaction type detection - reads actual SMS wording
+  String _intelligentTransactionTypeDetection(String smsBody) {
+    final bodyLower = smsBody.toLowerCase();
+    
+    // Method 1: Look for explicit mentions of card types
+    if (bodyLower.contains('credit card') || 
+        bodyLower.contains('credit-card') ||
+        bodyLower.contains('cc ending') ||
+        bodyLower.contains('cc****') ||
+        bodyLower.contains('via credit card') ||
+        bodyLower.contains('using credit card') ||
+        bodyLower.contains('through credit card') ||
+        bodyLower.contains('on credit card') ||
+        bodyLower.contains('cc transaction') ||
+        bodyLower.contains('credit card transaction')) {
+      return 'CREDIT_CARD';
+    }
+
+    if (bodyLower.contains('debit card') || 
+        bodyLower.contains('debit-card') ||
+        bodyLower.contains('dc ending') ||
+        bodyLower.contains('dc****') ||
+        bodyLower.contains('via debit card') ||
+        bodyLower.contains('using debit card') ||
+        bodyLower.contains('through debit card') ||
+        bodyLower.contains('on debit card') ||
+        bodyLower.contains('dc transaction') ||
+        bodyLower.contains('debit card transaction')) {
+      return 'DEBIT_CARD';
+    }
+
+    // Method 2: Look for UPI mentions
+    if (bodyLower.contains('upi') ||
+        bodyLower.contains('via upi') ||
+        bodyLower.contains('using upi') ||
+        bodyLower.contains('through upi') ||
+        bodyLower.contains('upi id') ||
+        bodyLower.contains('upi ref') ||
+        bodyLower.contains('upi transaction') ||
+        bodyLower.contains('paytm') ||
+        bodyLower.contains('phonepe') ||
+        bodyLower.contains('googlepay') ||
+        bodyLower.contains('google pay') ||
+        bodyLower.contains('bhim') ||
+        bodyLower.contains('amazon pay') ||
+        bodyLower.contains('mobikwik')) {
+      return 'UPI';
+    }
+
+    // Method 3: Look for generic card mentions (fallback to debit card)
+    if (bodyLower.contains('card ending') ||
+        bodyLower.contains('card no') ||
+        bodyLower.contains('card****') ||
+        bodyLower.contains('card xxxx')) {
+      return 'DEBIT_CARD';  // Default to debit card for generic card mentions
+    }
+
+    return 'OTHER';
   }
 
   /// Extract amount from SMS body
@@ -348,79 +433,6 @@ class SmsService {
     return null;
   }
 
-  /// Extract full bank name from SMS content and sender
-  String _extractBankName(String sender, String body) {
-    final bodyLower = body.toLowerCase();
-    final senderLower = sender.toLowerCase();
-    
-    // First, try to extract bank name from SMS body content
-    // Look for patterns like "HDFC Bank", "State Bank of India", etc.
-    for (final entry in bankNameMapping.entries) {
-      if (bodyLower.contains(entry.key)) {
-        return entry.value;
-      }
-    }
-    
-    // Then try sender
-    for (final entry in bankNameMapping.entries) {
-      if (senderLower.contains(entry.key)) {
-        return entry.value;
-      }
-    }
-
-    // Try to extract bank name from common SMS patterns
-    final bankPatterns = [
-      r'from\s+([a-zA-Z\s]+)\s+bank',
-      r'([a-zA-Z\s]+)\s+bank\s+a/c',
-      r'([a-zA-Z\s]+)\s+bank\s+account',
-      r'dear\s+([a-zA-Z\s]+)\s+bank',
-      r'([a-zA-Z\s]+)\s+bank\s+customer',
-    ];
-
-    for (final pattern in bankPatterns) {
-      final regex = RegExp(pattern, caseSensitive: false);
-      final match = regex.firstMatch(body);
-      if (match != null) {
-        final bankName = match.group(1)?.trim() ?? '';
-        if (bankName.isNotEmpty) {
-          // Check if this extracted name matches our mapping
-          final mappedName = bankNameMapping[bankName.toLowerCase()];
-          if (mappedName != null) {
-            return mappedName;
-          }
-          // Return the extracted name with proper formatting
-          return '${bankName.split(' ').map((word) => word.isNotEmpty ? word[0].toUpperCase() + word.substring(1) : '').join(' ')} Bank';
-        }
-      }
-    }
-
-    // If no match found, clean up sender name
-    String cleanSender = sender.replaceAll(RegExp(r'[^a-zA-Z\s-]'), '').trim();
-    if (cleanSender.isNotEmpty && cleanSender.length > 2) {
-      // Convert to proper case
-      return cleanSender.split(' ').map((word) => 
-        word.isNotEmpty ? word[0].toUpperCase() + word.substring(1).toLowerCase() : ''
-      ).join(' ');
-    }
-
-    return 'Unknown Bank';
-  }
-
-  /// Detect transaction type from SMS body - CHECK CREDIT CARD FIRST
-  String _detectTransactionType(String body) {
-    final bodyLower = body.toLowerCase();
-    
-    // Check in order of specificity - CREDIT CARD FIRST
-    for (final entry in transactionTypeKeywords.entries) {
-      for (final keyword in entry.value) {
-        if (bodyLower.contains(keyword)) {
-          return entry.key;
-        }
-      }
-    }
-    return 'OTHER';
-  }
-
   /// Get demo transactions for testing
   List<Transaction> _getDemoTransactions() {
     final now = DateTime.now();
@@ -432,7 +444,7 @@ class SmsService {
         amount: 2500.00,
         isCredit: false,
         bank: 'HDFC Bank',
-        description: 'Amount Rs.2500.00 debited from A/c **1234 via Debit Card on 15-Jan-25. Available Balance: Rs.45000.00',
+        description: 'Amount Rs.2500.00 debited from HDFC Bank A/c **1234 via Debit Card on 15-Jan-25. Available Balance: Rs.45000.00',
         transactionType: 'DEBIT_CARD',
       ),
       Transaction(
@@ -442,7 +454,7 @@ class SmsService {
         amount: 15000.00,
         isCredit: true,
         bank: 'ICICI Bank',
-        description: 'Rs.15000.00 credited to A/c **5678 via UPI from John Doe. Balance: Rs.60000.00',
+        description: 'Rs.15000.00 credited to ICICI Bank A/c **5678 via UPI from John Doe. Balance: Rs.60000.00',
         transactionType: 'UPI',
       ),
       Transaction(
@@ -452,7 +464,7 @@ class SmsService {
         amount: 850.00,
         isCredit: false,
         bank: 'Axis Bank',
-        description: 'Rs.850.00 spent via Credit Card **9876 at Amazon. Available limit: Rs.45000.00',
+        description: 'Rs.850.00 spent via Credit Card **9876 at Amazon from Axis Bank. Available limit: Rs.45000.00',
         transactionType: 'CREDIT_CARD',
       ),
       Transaction(
@@ -475,6 +487,6 @@ class SmsService {
         description: 'Rs.1200.00 debited from Central Bank of India A/c **7890 via Credit Card. Balance: Rs.15000.00',
         transactionType: 'CREDIT_CARD',
       ),
-    ];
-  }
-} 
+          ];
+    }
+  } 

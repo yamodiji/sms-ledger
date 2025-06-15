@@ -214,7 +214,7 @@ class _LedgerScreenState extends State<LedgerScreen> with TickerProviderStateMix
                       });
                       Navigator.pop(context);
                     },
-                    selectedColor: Colors.blue.withValues(alpha: 0.2),
+                    selectedColor: Colors.blue.withOpacity(0.2),
                     checkmarkColor: Colors.blue,
                   );
                 }).toList(),
@@ -280,7 +280,7 @@ class _LedgerScreenState extends State<LedgerScreen> with TickerProviderStateMix
               color: Colors.white,
               boxShadow: [
                 BoxShadow(
-                  color: Colors.grey.withValues(alpha: 0.1),
+                  color: Colors.grey.withOpacity(0.1),
                   spreadRadius: 1,
                   blurRadius: 3,
                   offset: const Offset(0, 1),

@@ -57,10 +57,10 @@ class TransactionItem extends StatelessWidget {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                         decoration: BoxDecoration(
-                          color: _getTransactionTypeColor().withValues(alpha: 0.1),
+                          color: _getTransactionTypeColor().withOpacity(0.1),
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
-                            color: _getTransactionTypeColor().withValues(alpha: 0.3),
+                            color: _getTransactionTypeColor().withOpacity(0.3),
                             width: 1,
                           ),
                         ),

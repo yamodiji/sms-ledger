@@ -13,6 +13,7 @@ class TransactionItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final dateFormatter = DateFormat('dd MMM yyyy');
+    final timeFormatter = DateFormat('hh:mm a');
     
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -20,59 +21,91 @@ class TransactionItem extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         child: Row(
           children: [
-            // Left side - Sender and Date
+            // Left side - Bank Logo
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.grey[100],
+              ),
+              child: Center(
+                child: Text(
+                  transaction.bankLogo,
+                  style: const TextStyle(fontSize: 24),
+                ),
+              ),
+            ),
+            
+            const SizedBox(width: 16),
+            
+            // Middle - Bank Name, Transaction Type, Date
             Expanded(
-              flex: 2,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    transaction.sender,
+                    transaction.bank,
                     style: const TextStyle(
                       fontWeight: FontWeight.bold,
                       fontSize: 16,
                     ),
                   ),
                   const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: _getTransactionTypeColor().withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: _getTransactionTypeColor().withValues(alpha: 0.3),
+                            width: 1,
+                          ),
+                        ),
+                        child: Text(
+                          transaction.transactionTypeDisplay,
+                          style: TextStyle(
+                            color: _getTransactionTypeColor(),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
                   Text(
-                    dateFormatter.format(transaction.date),
+                    '${dateFormatter.format(transaction.date)} • ${timeFormatter.format(transaction.date)}',
                     style: TextStyle(
                       color: Colors.grey[600],
-                      fontSize: 14,
+                      fontSize: 12,
                     ),
                   ),
                 ],
               ),
             ),
             
-            // Right side - Amount and Bank Logo
-            Expanded(
-              flex: 1,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    transaction.formattedAmount,
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                      color: transaction.isCredit ? Colors.green : Colors.red,
-                    ),
+            // Right side - Amount
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  transaction.formattedAmount,
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 18,
+                    color: transaction.isCredit ? Colors.green[600] : Colors.red[600],
                   ),
-                  const SizedBox(height: 8),
-                  Container(
-                    width: 32,
-                    height: 32,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.grey[200],
-                    ),
-                    child: ClipOval(
-                      child: _buildBankLogo(),
-                    ),
-                  ),
-                ],
-              ),
+                ),
+                const SizedBox(height: 4),
+                Icon(
+                  transaction.isCredit ? Icons.arrow_downward : Icons.arrow_upward,
+                  size: 16,
+                  color: transaction.isCredit ? Colors.green[600] : Colors.red[600],
+                ),
+              ],
             ),
           ],
         ),
@@ -80,28 +113,18 @@ class TransactionItem extends StatelessWidget {
     );
   }
 
-  Widget _buildBankLogo() {
-    // Since we're using placeholder files, we'll show an icon instead
-    // In a real app, you would use Image.asset(transaction.bankLogo)
-    return Icon(
-      Icons.account_balance,
-      size: 20,
-      color: Colors.grey[600],
-    );
-    
-    // Uncomment this when you have actual PNG files:
-    /*
-    return Image.asset(
-      transaction.bankLogo,
-      fit: BoxFit.cover,
-      errorBuilder: (context, error, stackTrace) {
-        return Icon(
-          Icons.account_balance,
-          size: 20,
-          color: Colors.grey[600],
-        );
-      },
-    );
-    */
+  Color _getTransactionTypeColor() {
+    switch (transaction.transactionType) {
+      case 'DEBIT_CARD':
+        return Colors.blue;
+      case 'CREDIT_CARD':
+        return Colors.purple;
+      case 'UPI':
+        return Colors.orange;
+      case 'OTHER':
+        return Colors.teal;
+      default:
+        return Colors.grey;
+    }
   }
 } 

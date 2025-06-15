@@ -66,7 +66,11 @@ class SmsService {
       
       return transactions;
     } catch (e) {
-      print('Error reading SMS: $e');
+      // Log error in debug mode only
+      assert(() {
+        print('Error reading SMS: $e');
+        return true;
+      }());
       return [];
     }
   }

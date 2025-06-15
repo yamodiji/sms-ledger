@@ -1,10 +1,8 @@
 import 'package:another_telephony/telephony.dart';
-import 'package:razorpay_ifsc/razorpay_ifsc.dart';
 import '../models/transaction.dart';
 
 class SmsService {
   final Telephony telephony = Telephony.instance;
-  final IfscRazorpay _ifscRazorpay = IfscRazorpay();
 
   // Keywords for identifying transaction messages
   static const List<String> debitKeywords = [
@@ -39,7 +37,7 @@ class SmsService {
     'balance credited',
   ];
 
-  // UNIVERSAL bank name mapping - covers ALL major Indian banks + IFSC integration
+  // UNIVERSAL bank name mapping - covers ALL major Indian banks
   static const Map<String, String> bankNameMapping = {
     // HDFC variations
     'hdfc': 'HDFC Bank',
@@ -58,7 +56,6 @@ class SmsService {
     'ad-icici': 'ICICI Bank',
     'vm-icici': 'ICICI Bank',
     'tm-icici': 'ICICI Bank',
-    'icicibk': 'ICICI Bank',
     
     // SBI variations
     'sbi': 'State Bank of India',
@@ -364,7 +361,7 @@ class SmsService {
       final transactions = <Transaction>[];
       
       for (final message in messages) {
-        final transaction = await _parseTransaction(message);
+        final transaction = _parseTransaction(message);
         if (transaction != null) {
           transactions.add(transaction);
         }
@@ -376,8 +373,8 @@ class SmsService {
     }
   }
 
-  /// Parse SMS message into transaction - UNIVERSAL PARSING with IFSC integration
-  Future<Transaction?> _parseTransaction(SmsMessage message) async {
+  /// Parse SMS message into transaction - UNIVERSAL PARSING
+  Transaction? _parseTransaction(SmsMessage message) {
     final originalBody = message.body ?? '';
     final bodyLower = originalBody.toLowerCase();
     final sender = message.address ?? '';
@@ -393,8 +390,8 @@ class SmsService {
     final amount = _extractAmount(bodyLower);
     if (amount == null) return null;
 
-    // UNIVERSAL bank name extraction with IFSC integration
-    final bankName = await _universalBankExtraction(sender, originalBody);
+    // UNIVERSAL bank name extraction from SMS content
+    final bankName = _universalBankExtraction(sender, originalBody);
     
     // UNIVERSAL transaction type detection from actual SMS content
     final transactionType = _universalTransactionTypeDetection(originalBody);
@@ -411,25 +408,12 @@ class SmsService {
     );
   }
 
-  /// UNIVERSAL bank name extraction - works with ANY bank + IFSC database
-  Future<String> _universalBankExtraction(String sender, String smsBody) async {
+  /// UNIVERSAL bank name extraction - works with ANY bank
+  String _universalBankExtraction(String sender, String smsBody) {
     final bodyLower = smsBody.toLowerCase();
     final senderLower = sender.toLowerCase();
     
-    // Method 1: Extract IFSC code from SMS and get bank name from Razorpay database
-    final ifscCode = _extractIfscCode(smsBody);
-    if (ifscCode != null) {
-      try {
-        final bankDetails = await _ifscRazorpay.getBankDetails(ifscCode);
-        if (bankDetails != null && bankDetails.bank != null) {
-          return bankDetails.bank!;
-        }
-      } catch (e) {
-        // Continue with other methods if IFSC lookup fails
-      }
-    }
-    
-    // Method 2: Look for explicit bank mentions in SMS body (UNIVERSAL PATTERNS)
+    // Method 1: Look for explicit bank mentions in SMS body (UNIVERSAL PATTERNS)
     final universalBankPatterns = [
       // Full bank names with "Bank"
       r'([a-zA-Z\s]+)\s+bank(?:\s+ltd)?(?:\s+limited)?',
@@ -460,7 +444,7 @@ class SmsService {
       }
     }
 
-    // Method 3: Look for bank name patterns in SMS content (UNIVERSAL)
+    // Method 2: Look for bank name patterns in SMS content (UNIVERSAL)
     final contentPatterns = [
       r'dear\s+([a-zA-Z\s]+)\s+(?:bank\s+)?customer',
       r'([a-zA-Z\s]+)\s+bank\s+a/?c',
@@ -489,14 +473,14 @@ class SmsService {
       }
     }
 
-    // Method 4: Check sender against bank mapping (COMPREHENSIVE)
+    // Method 3: Check sender against bank mapping (COMPREHENSIVE)
     for (final entry in bankNameMapping.entries) {
       if (senderLower.contains(entry.key)) {
         return entry.value;
       }
     }
 
-    // Method 5: Extract bank name from sender (UNIVERSAL FALLBACK)
+    // Method 4: Extract bank name from sender (UNIVERSAL FALLBACK)
     final senderPatterns = [
       r'([a-zA-Z]+)(?:-|_)?(?:bank|bk|bnk)',
       r'(?:ad|vm|tm|hd)-([a-zA-Z]+)',
@@ -519,21 +503,13 @@ class SmsService {
       }
     }
 
-    // Method 6: Clean up sender name as final fallback
+    // Method 5: Clean up sender name as final fallback
     String cleanSender = sender.replaceAll(RegExp(r'[^a-zA-Z\s-]'), '').trim();
     if (cleanSender.isNotEmpty && cleanSender.length > 2) {
       return _formatBankName(cleanSender);
     }
 
     return 'Unknown Bank';
-  }
-
-  /// Extract IFSC code from SMS body
-  String? _extractIfscCode(String smsBody) {
-    // IFSC code pattern: 4 letters followed by 7 digits
-    final ifscPattern = RegExp(r'\b([A-Z]{4}[0-9]{7})\b', caseSensitive: false);
-    final match = ifscPattern.firstMatch(smsBody);
-    return match?.group(1)?.toUpperCase();
   }
 
   /// Format bank name properly
@@ -651,7 +627,7 @@ class SmsService {
     return null;
   }
 
-  /// Get demo transactions for testing - shows UNIVERSAL coverage with IFSC integration
+  /// Get demo transactions for testing - shows UNIVERSAL coverage
   List<Transaction> _getDemoTransactions() {
     final now = DateTime.now();
     return [
@@ -662,7 +638,7 @@ class SmsService {
         amount: 2500.00,
         isCredit: false,
         bank: 'HDFC Bank',
-        description: 'Amount Rs.2500.00 debited from HDFC Bank A/c **1234 via Debit Card on 15-Jan-25. IFSC: HDFC0000001. Available Balance: Rs.45000.00',
+        description: 'Amount Rs.2500.00 debited from HDFC Bank A/c **1234 via Debit Card on 15-Jan-25. Available Balance: Rs.45000.00',
         transactionType: 'DEBIT_CARD',
       ),
       Transaction(
@@ -672,7 +648,7 @@ class SmsService {
         amount: 15000.00,
         isCredit: true,
         bank: 'ICICI Bank',
-        description: 'Rs.15000.00 credited to ICICI Bank A/c **5678 via UPI from John Doe. IFSC: ICIC0000001. Balance: Rs.60000.00',
+        description: 'Rs.15000.00 credited to ICICI Bank A/c **5678 via UPI from John Doe. Balance: Rs.60000.00',
         transactionType: 'UPI',
       ),
       Transaction(
@@ -682,7 +658,7 @@ class SmsService {
         amount: 850.00,
         isCredit: false,
         bank: 'Axis Bank',
-        description: 'Rs.850.00 spent via Credit Card **9876 at Amazon from Axis Bank. IFSC: UTIB0000001. Available limit: Rs.45000.00',
+        description: 'Rs.850.00 spent via Credit Card **9876 at Amazon from Axis Bank. Available limit: Rs.45000.00',
         transactionType: 'CREDIT_CARD',
       ),
       Transaction(
@@ -692,7 +668,7 @@ class SmsService {
         amount: 5000.00,
         isCredit: true,
         bank: 'DBS Bank',
-        description: 'Rs.5000.00 credited to your DBS Bank A/c **3456 salary credit. IFSC: DBSS0IN0811. Balance: Rs.25000.00',
+        description: 'Rs.5000.00 credited to your DBS Bank A/c **3456 salary credit. Balance: Rs.25000.00',
         transactionType: 'OTHER',
       ),
       Transaction(
@@ -702,7 +678,7 @@ class SmsService {
         amount: 1200.00,
         isCredit: false,
         bank: 'Central Bank of India',
-        description: 'Rs.1200.00 debited from Central Bank of India A/c **7890 via Credit Card. IFSC: CBIN0280001. Balance: Rs.15000.00',
+        description: 'Rs.1200.00 debited from Central Bank of India A/c **7890 via Credit Card. Balance: Rs.15000.00',
         transactionType: 'CREDIT_CARD',
       ),
       Transaction(

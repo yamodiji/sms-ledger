@@ -15,7 +15,8 @@ void main() {
     await tester.pumpWidget(const MyApp());
 
     // Verify that the app starts with the Ledger screen
-    expect(find.text('Ledger'), findsOneWidget);
+    // There should be 2 "Ledger" texts: one in AppBar, one in bottom nav
+    expect(find.text('Ledger'), findsNWidgets(2));
     expect(find.text('Settings'), findsOneWidget);
 
     // Verify the toggle switch is present

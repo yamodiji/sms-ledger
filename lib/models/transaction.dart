@@ -1,17 +1,24 @@
 class Transaction {
+  final String id;
   final String sender;
   final DateTime date;
   final double amount;
   final bool isCredit;
-  final String originalMessage;
+  final String bank;
+  final String description;
 
   Transaction({
+    required this.id,
     required this.sender,
     required this.date,
     required this.amount,
     required this.isCredit,
-    required this.originalMessage,
+    required this.bank,
+    required this.description,
   });
+
+  // Backward compatibility getter
+  String get originalMessage => description;
 
   String get formattedAmount {
     final prefix = isCredit ? '+₹' : '-₹';
@@ -19,19 +26,19 @@ class Transaction {
   }
 
   String get bankLogo {
-    return getBankLogo(sender);
+    return getBankLogo(bank);
   }
 
-  static String getBankLogo(String sender) {
-    sender = sender.toLowerCase();
-    if (sender.contains('hdfc')) return 'assets/bank_logos/hdfc.png';
-    if (sender.contains('icici')) return 'assets/bank_logos/icici.png';
-    if (sender.contains('sbi')) return 'assets/bank_logos/sbi.png';
-    if (sender.contains('axis')) return 'assets/bank_logos/axis.png';
-    if (sender.contains('kotak')) return 'assets/bank_logos/default.png';
-    if (sender.contains('pnb')) return 'assets/bank_logos/default.png';
-    if (sender.contains('bob')) return 'assets/bank_logos/default.png';
-    if (sender.contains('canara')) return 'assets/bank_logos/default.png';
+  static String getBankLogo(String bankName) {
+    final bank = bankName.toLowerCase();
+    if (bank.contains('hdfc')) return 'assets/bank_logos/hdfc.png';
+    if (bank.contains('icici')) return 'assets/bank_logos/icici.png';
+    if (bank.contains('sbi')) return 'assets/bank_logos/sbi.png';
+    if (bank.contains('axis')) return 'assets/bank_logos/axis.png';
+    if (bank.contains('kotak')) return 'assets/bank_logos/default.png';
+    if (bank.contains('pnb')) return 'assets/bank_logos/default.png';
+    if (bank.contains('bob')) return 'assets/bank_logos/default.png';
+    if (bank.contains('canara')) return 'assets/bank_logos/default.png';
     // Add more banks as needed
     return 'assets/bank_logos/default.png';
   }

@@ -1,7 +1,5 @@
 import 'package:another_telephony/telephony.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter/services.dart';
 import '../models/transaction.dart';
 
 class SmsService {
@@ -30,75 +28,23 @@ class SmsService {
     'transfer',
   ];
 
-  /// Multi-layered permission request strategy
-  Future<SmsPermissionResult> requestSmsPermission() async {
+  /// Request SMS permission using native Android dialog
+  /// This is the same approach that working apps like Finart use
+  Future<bool> requestSmsPermission() async {
     try {
-      // Strategy 1: Try telephony-based permission first (more direct)
-      final telephonyResult = await _requestTelephonyPermission();
-      if (telephonyResult == SmsPermissionResult.granted) {
-        return SmsPermissionResult.granted;
-      }
-
-      // Strategy 2: Traditional permission handler approach
-      final currentStatus = await Permission.sms.status;
-      if (currentStatus == PermissionStatus.granted) {
-        return SmsPermissionResult.granted;
-      }
-
-      if (currentStatus == PermissionStatus.permanentlyDenied) {
-        return SmsPermissionResult.permanentlyDenied;
-      }
-
-      // Try to request permission
-      final status = await Permission.sms.request();
-      
-      switch (status) {
-        case PermissionStatus.granted:
-          return SmsPermissionResult.granted;
-        case PermissionStatus.denied:
-          return SmsPermissionResult.denied;
-        case PermissionStatus.permanentlyDenied:
-          return SmsPermissionResult.permanentlyDenied;
-        case PermissionStatus.restricted:
-          return SmsPermissionResult.restricted;
-        default:
-          return SmsPermissionResult.denied;
-      }
+      // Use the telephony package's built-in permission request
+      // This triggers the original Android permission dialog
+      final bool? hasPermission = await telephony.requestPhoneAndSmsPermissions;
+      return hasPermission == true;
     } catch (e) {
-      // If there's an error, try telephony direct approach
-      return await _requestTelephonyPermission();
+      return false;
     }
   }
 
-  /// Direct telephony permission request (bypasses some Android restrictions)
-  Future<SmsPermissionResult> _requestTelephonyPermission() async {
-    try {
-      // Check if telephony permissions are available
-      final hasPermission = await telephony.requestPhoneAndSmsPermissions;
-      if (hasPermission == true) {
-        return SmsPermissionResult.granted;
-      }
-      
-      // Try to access SMS directly to test permission
-      try {
-        await telephony.getInboxSms(
-          columns: [SmsColumn.ADDRESS],
-          filter: SmsFilter.where(SmsColumn.DATE)
-              .greaterThan(DateTime.now().subtract(const Duration(days: 1)).millisecondsSinceEpoch.toString()),
-        );
-        return SmsPermissionResult.granted;
-      } catch (e) {
-        return SmsPermissionResult.restricted;
-      }
-    } catch (e) {
-      return SmsPermissionResult.restricted;
-    }
-  }
-
-  /// Check current SMS permission status
+  /// Check if SMS permission is already granted
   Future<bool> checkSmsPermission() async {
     try {
-      // Try direct SMS access test
+      // Try to access SMS to test if permission is granted
       await telephony.getInboxSms(
         columns: [SmsColumn.ADDRESS],
         filter: SmsFilter.where(SmsColumn.DATE)
@@ -106,55 +52,24 @@ class SmsService {
       );
       return true;
     } catch (e) {
-      final status = await Permission.sms.status;
-      return status == PermissionStatus.granted;
+      return false;
     }
-  }
-
-  /// Open app settings for permission management
-  Future<bool> openPermissionSettings() async {
-    return await openAppSettings();
-  }
-
-  /// Opens Android's restricted settings for this app
-  Future<void> openRestrictedSettings() async {
-    try {
-      // Try to open app-specific settings
-      await openAppSettings();
-    } catch (e) {
-      // Fallback - this will at least open general settings
-      const platform = MethodChannel('flutter/platform');
-      try {
-        await platform.invokeMethod('SystemNavigator.pop');
-      } catch (_) {
-        // If all else fails, just return
-      }
-    }
-  }
-
-  /// Request SMS permission with user-friendly approach
-  Future<SmsPermissionResult> requestSmsPermissionWithGuidance() async {
-    // First, try the multi-layered approach
-    final result = await requestSmsPermission();
-    
-    if (result == SmsPermissionResult.granted) {
-      return result;
-    }
-
-    // If not granted, provide specific guidance based on result
-    return result;
   }
 
   Future<List<Transaction>> getTransactions() async {
     final prefs = await SharedPreferences.getInstance();
     final daysRange = prefs.getInt('transaction_days_range') ?? 30;
     
-    // Try multiple permission strategies
-    final permissionResult = await requestSmsPermissionWithGuidance();
+    // Check if we have permission
+    final hasPermission = await checkSmsPermission();
     
-    // If permission not granted, return sample data
-    if (permissionResult != SmsPermissionResult.granted) {
-      return getSampleTransactions();
+    // If no permission, try to request it
+    if (!hasPermission) {
+      final granted = await requestSmsPermission();
+      if (!granted) {
+        // Return sample data if permission denied
+        return getSampleTransactions();
+      }
     }
 
     final DateTime cutoffDate = DateTime.now().subtract(Duration(days: daysRange));
@@ -198,117 +113,98 @@ class SmsService {
     }
 
     // Extract amount using regex
-    final double? amount = _extractAmount(body);
-    if (amount == null) {
-      return null;
+    final RegExp amountRegex = RegExp(r'(?:rs\.?|inr|₹)\s*(\d+(?:,\d+)*(?:\.\d{2})?)', caseSensitive: false);
+    final Match? match = amountRegex.firstMatch(body);
+    
+    if (match == null) {
+      return null; // No amount found
     }
 
-    // Convert timestamp to DateTime
-    final DateTime date = DateTime.fromMillisecondsSinceEpoch(
-      int.tryParse(message.date.toString()) ?? DateTime.now().millisecondsSinceEpoch,
-    );
+    final String amountStr = match.group(1)!.replaceAll(',', '');
+    final double amount = double.tryParse(amountStr) ?? 0.0;
+    
+    if (amount == 0.0) {
+      return null; // Invalid amount
+    }
 
+    // Determine bank from sender
+    final String bank = _getBankFromSender(sender);
+    
     return Transaction(
-      sender: sender,
-      date: date,
+      id: message.id?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString(),
       amount: amount,
       isCredit: isCredit,
-      originalMessage: message.body ?? '',
+      sender: sender,
+      bank: bank,
+      date: DateTime.fromMillisecondsSinceEpoch(message.date ?? DateTime.now().millisecondsSinceEpoch),
+      description: message.body ?? '',
     );
   }
 
-  double? _extractAmount(String text) {
-    // Common patterns for amount extraction
-    final List<RegExp> patterns = [
-      RegExp(r'rs\.?\s*(\d+(?:,\d+)*(?:\.\d{2})?)', caseSensitive: false),
-      RegExp(r'inr\s*(\d+(?:,\d+)*(?:\.\d{2})?)', caseSensitive: false),
-      RegExp(r'₹\s*(\d+(?:,\d+)*(?:\.\d{2})?)', caseSensitive: false),
-      RegExp(r'amount\s*:?\s*rs\.?\s*(\d+(?:,\d+)*(?:\.\d{2})?)', caseSensitive: false),
-      RegExp(r'amount\s*:?\s*₹\s*(\d+(?:,\d+)*(?:\.\d{2})?)', caseSensitive: false),
-      RegExp(r'(\d+(?:,\d+)*(?:\.\d{2})?)\s*(?:rs|inr|₹)', caseSensitive: false),
-    ];
-
-    for (final pattern in patterns) {
-      final match = pattern.firstMatch(text);
-      if (match != null) {
-        final amountStr = match.group(1)?.replaceAll(',', '') ?? '';
-        final amount = double.tryParse(amountStr);
-        if (amount != null && amount > 0) {
-          return amount;
-        }
-      }
-    }
-
-    return null;
+  String _getBankFromSender(String sender) {
+    final String lowerSender = sender.toLowerCase();
+    
+    if (lowerSender.contains('hdfc')) return 'HDFC';
+    if (lowerSender.contains('icici')) return 'ICICI';
+    if (lowerSender.contains('sbi')) return 'SBI';
+    if (lowerSender.contains('axis')) return 'Axis';
+    if (lowerSender.contains('kotak')) return 'Kotak';
+    if (lowerSender.contains('pnb')) return 'PNB';
+    if (lowerSender.contains('bob')) return 'BOB';
+    if (lowerSender.contains('canara')) return 'Canara';
+    if (lowerSender.contains('union')) return 'Union';
+    if (lowerSender.contains('indian')) return 'Indian';
+    
+    return 'Other';
   }
 
-  // Generate sample transactions for testing
   List<Transaction> getSampleTransactions() {
-    final now = DateTime.now();
     return [
       Transaction(
-        sender: 'HDFCBK',
-        date: now.subtract(const Duration(days: 1)),
-        amount: 500.00,
-        isCredit: false,
-        originalMessage: 'Your account has been debited with Rs.500.00',
-      ),
-      Transaction(
-        sender: 'ICICIBK',
-        date: now.subtract(const Duration(days: 2)),
-        amount: 1200.50,
-        isCredit: true,
-        originalMessage: 'Your account has been credited with Rs.1200.50',
-      ),
-      Transaction(
-        sender: 'SBIIN',
-        date: now.subtract(const Duration(days: 3)),
-        amount: 250.00,
-        isCredit: false,
-        originalMessage: 'Amount Rs.250.00 debited from your account',
-      ),
-      Transaction(
-        sender: 'AXISBK',
-        date: now.subtract(const Duration(days: 5)),
+        id: '1',
         amount: 2500.00,
-        isCredit: true,
-        originalMessage: 'Rs.2500.00 credited to your account',
-      ),
-      Transaction(
-        sender: 'HDFCBK',
-        date: now.subtract(const Duration(days: 7)),
-        amount: 150.00,
         isCredit: false,
-        originalMessage: 'ATM withdrawal Rs.150.00',
+        sender: 'HDFC-BANK',
+        bank: 'HDFC',
+        date: DateTime.now().subtract(const Duration(hours: 2)),
+        description: 'Amount debited from your account for UPI transaction',
       ),
       Transaction(
-        sender: 'PAYTM',
-        date: now.subtract(const Duration(days: 10)),
-        amount: 75.50,
-        isCredit: true,
-        originalMessage: 'Cashback Rs.75.50 credited',
-      ),
-      Transaction(
-        sender: 'GOOGLEPAY',
-        date: now.subtract(const Duration(days: 12)),
-        amount: 300.00,
-        isCredit: false,
-        originalMessage: 'Payment of Rs.300.00 via Google Pay',
-      ),
-      Transaction(
-        sender: 'ICICIBK',
-        date: now.subtract(const Duration(days: 15)),
+        id: '2',
         amount: 5000.00,
         isCredit: true,
-        originalMessage: 'Salary credited Rs.5000.00',
+        sender: 'ICICI-BANK',
+        bank: 'ICICI',
+        date: DateTime.now().subtract(const Duration(days: 1)),
+        description: 'Amount credited to your account - salary transfer',
+      ),
+      Transaction(
+        id: '3',
+        amount: 150.00,
+        isCredit: false,
+        sender: 'SBI-BANK',
+        bank: 'SBI',
+        date: DateTime.now().subtract(const Duration(days: 2)),
+        description: 'ATM withdrawal transaction completed',
+      ),
+      Transaction(
+        id: '4',
+        amount: 1200.00,
+        isCredit: true,
+        sender: 'AXIS-BANK',
+        bank: 'Axis',
+        date: DateTime.now().subtract(const Duration(days: 3)),
+        description: 'Cashback credited for online purchase',
+      ),
+      Transaction(
+        id: '5',
+        amount: 800.00,
+        isCredit: false,
+        sender: 'HDFC-BANK',
+        bank: 'HDFC',
+        date: DateTime.now().subtract(const Duration(days: 4)),
+        description: 'Bill payment transaction successful',
       ),
     ];
   }
-}
-
-enum SmsPermissionResult {
-  granted,
-  denied,
-  permanentlyDenied,
-  restricted,
 } 

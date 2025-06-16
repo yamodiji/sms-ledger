@@ -4,15 +4,13 @@ import '../models/transaction.dart';
 class SmsService {
   final Telephony telephony = Telephony.instance;
 
-  // Keywords for identifying transaction messages
+  // Keywords for identifying REAL transaction messages (not promotional)
   static const List<String> debitKeywords = [
     'debited',
     'withdrawn',
     'spent',
     'paid',
-    'debit',
     'purchase',
-    'transaction',
     'charged',
     'used',
     'amount debited',
@@ -25,7 +23,6 @@ class SmsService {
     'credited',
     'received',
     'deposited',
-    'credit',
     'refund',
     'cashback',
     'salary',
@@ -35,6 +32,56 @@ class SmsService {
     'amt credited',
     'money credited',
     'balance credited',
+  ];
+
+  // Transaction confirmation phrases that indicate REAL transactions
+  static const List<String> transactionConfirmationPhrases = [
+    'if this transaction was not done by you',
+    'if this transaction wasnt done by you',
+    'if you have not done this transaction',
+    'if you did not make this transaction',
+    'transaction not done by you',
+    'available balance',
+    'balance is',
+    'remaining balance',
+    'account balance',
+    'current balance',
+    'total balance',
+    'txn id',
+    'transaction id',
+    'ref no',
+    'reference number',
+    'utr no',
+    'utr number',
+  ];
+
+  // SPAM keywords that indicate promotional messages (NOT transactions)
+  static const List<String> spamKeywords = [
+    'credit limit',
+    'eligible for',
+    'you are eligible',
+    'congratulations',
+    'offer',
+    'apply now',
+    'click here',
+    'call us',
+    'visit branch',
+    'upgrade',
+    'pre-approved',
+    'limited time',
+    'hurry',
+    'act now',
+    'terms and conditions',
+    'interest rate',
+    'processing fee',
+    'annual fee',
+    'reward points',
+    'cashback offer',
+    'exclusive offer',
+    'special offer',
+    'promotional',
+    'marketing',
+    'advertisement',
   ];
 
   // UNIVERSAL bank name mapping - covers ALL major Indian banks
@@ -373,27 +420,51 @@ class SmsService {
     }
   }
 
-  /// Parse SMS message into transaction - UNIVERSAL PARSING
+  /// Parse SMS message into transaction - ANTI-SPAM VALIDATION
   Transaction? _parseTransaction(SmsMessage message) {
     final originalBody = message.body ?? '';
     final bodyLower = originalBody.toLowerCase();
     final sender = message.address ?? '';
     final date = DateTime.fromMillisecondsSinceEpoch(message.date ?? 0);
 
-    // Check if it's a transaction message
-    final isDebit = debitKeywords.any((keyword) => bodyLower.contains(keyword));
-    final isCredit = creditKeywords.any((keyword) => bodyLower.contains(keyword));
-    
-    if (!isDebit && !isCredit) return null;
+    // STEP 1: Check for SPAM keywords first (reject promotional messages)
+    final isSpam = spamKeywords.any((keyword) => bodyLower.contains(keyword));
+    if (isSpam) return null;
 
-    // Extract amount
+    // STEP 2: Check if it contains transaction keywords
+    final hasDebitKeyword = debitKeywords.any((keyword) => bodyLower.contains(keyword));
+    final hasCreditKeyword = creditKeywords.any((keyword) => bodyLower.contains(keyword));
+    
+    if (!hasDebitKeyword && !hasCreditKeyword) return null;
+
+    // STEP 3: Extract amount (must have valid amount)
     final amount = _extractAmount(bodyLower);
     if (amount == null) return null;
 
-    // UNIVERSAL bank name extraction from SMS content
-    final bankName = _universalBankExtraction(sender, originalBody);
+    // STEP 4: Check for transaction confirmation phrases (REAL transaction indicators)
+    final hasConfirmationPhrase = transactionConfirmationPhrases.any((phrase) => bodyLower.contains(phrase));
     
-    // UNIVERSAL transaction type detection from actual SMS content
+    // STEP 5: Multi-keyword validation - must have multiple indicators
+    final validationScore = _calculateTransactionValidationScore(bodyLower, sender);
+    if (validationScore < 3 && !hasConfirmationPhrase) return null;
+
+    // STEP 6: Determine if it's credit or debit
+    bool isCredit = hasCreditKeyword && !hasDebitKeyword;
+    
+    // If both credit and debit keywords are present, prioritize the more specific one
+    if (hasDebitKeyword && hasCreditKeyword) {
+      // Look for more specific patterns
+      if (bodyLower.contains('debited from') || bodyLower.contains('amount debited')) {
+        isCredit = false; // It's a debit
+      } else if (bodyLower.contains('credited to') || bodyLower.contains('amount credited')) {
+        isCredit = true; // It's a credit
+      } else {
+        return null; // Ambiguous, skip
+      }
+    }
+
+    // STEP 7: Extract bank name and transaction type
+    final bankName = _universalBankExtraction(sender, originalBody);
     final transactionType = _universalTransactionTypeDetection(originalBody);
 
     return Transaction(
@@ -406,6 +477,25 @@ class SmsService {
       description: originalBody,
       transactionType: transactionType,
     );
+  }
+
+  /// Calculate validation score to ensure it's a REAL transaction
+  int _calculateTransactionValidationScore(String bodyLower, String sender) {
+    int score = 0;
+    
+    // +1 for each indicator present
+    if (bodyLower.contains('account') || bodyLower.contains('a/c')) score++;
+    if (bodyLower.contains('balance')) score++;
+    if (bodyLower.contains('rs') || bodyLower.contains('inr') || bodyLower.contains('₹')) score++;
+    if (bodyLower.contains('bank')) score++;
+    if (bodyLower.contains('card') && !bodyLower.contains('reward card')) score++;
+    if (bodyLower.contains('upi') || bodyLower.contains('@')) score++;
+    if (bodyLower.contains('transaction') || bodyLower.contains('txn')) score++;
+    if (bodyLower.contains('reference') || bodyLower.contains('ref')) score++;
+    if (sender.toLowerCase().contains('bank') || sender.toLowerCase().contains('bk')) score++;
+    if (bodyLower.contains('date') || bodyLower.contains('time')) score++;
+    
+    return score;
   }
 
   /// UNIVERSAL bank name extraction - works with ANY bank
@@ -523,13 +613,14 @@ class SmsService {
   String _universalTransactionTypeDetection(String smsBody) {
     final bodyLower = smsBody.toLowerCase();
     
-    // Method 1: Look for explicit mentions of card types (COMPREHENSIVE)
+    // Method 1: Look for explicit mentions of card types (TRANSACTION ONLY)
     final creditCardPatterns = [
-      'credit card', 'credit-card', 'cc ending', 'cc****', 'cc xxxx',
+      'credit card ending', 'credit-card ending', 'cc ending', 'cc****', 'cc xxxx',
       'via credit card', 'using credit card', 'through credit card',
       'on credit card', 'cc transaction', 'credit card transaction',
       'spent on credit card', 'purchase on credit card', 'cc purchase',
-      'credit card payment', 'cc payment', 'credit card bill',
+      'credit card payment', 'cc payment', 'paid via cc',
+      'spent via credit card', 'transaction on credit card',
     ];
 
     for (final pattern in creditCardPatterns) {
@@ -627,7 +718,7 @@ class SmsService {
     return null;
   }
 
-  /// Get demo transactions for testing - shows UNIVERSAL coverage
+  /// Get demo transactions for testing - shows ANTI-SPAM filtering
   List<Transaction> _getDemoTransactions() {
     final now = DateTime.now();
     return [
@@ -638,7 +729,7 @@ class SmsService {
         amount: 2500.00,
         isCredit: false,
         bank: 'HDFC Bank',
-        description: 'Amount Rs.2500.00 debited from HDFC Bank A/c **1234 via Debit Card on 15-Jan-25. Available Balance: Rs.45000.00',
+        description: 'Amount Rs.2500.00 debited from HDFC Bank A/c **1234 via Debit Card on 15-Jan-25. Available Balance: Rs.45000.00. If this transaction was not done by you, contact us.',
         transactionType: 'DEBIT_CARD',
       ),
       Transaction(
@@ -648,7 +739,7 @@ class SmsService {
         amount: 15000.00,
         isCredit: true,
         bank: 'ICICI Bank',
-        description: 'Rs.15000.00 credited to ICICI Bank A/c **5678 via UPI from John Doe. Balance: Rs.60000.00',
+        description: 'Rs.15000.00 credited to ICICI Bank A/c **5678 via UPI from John Doe. Available Balance: Rs.60000.00. Txn ID: 987654321',
         transactionType: 'UPI',
       ),
       Transaction(
@@ -658,7 +749,7 @@ class SmsService {
         amount: 850.00,
         isCredit: false,
         bank: 'Axis Bank',
-        description: 'Rs.850.00 spent via Credit Card **9876 at Amazon from Axis Bank. Available limit: Rs.45000.00',
+        description: 'Rs.850.00 spent via credit card ending **9876 at Amazon from Axis Bank A/c. Available Balance: Rs.45000.00. If this transaction wasnt done by you, contact us.',
         transactionType: 'CREDIT_CARD',
       ),
       Transaction(

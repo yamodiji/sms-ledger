@@ -526,21 +526,40 @@ class SmsService {
     );
   }
 
-  /// Calculate validation score to ensure it's a REAL transaction
+  /// Calculate validation score to ensure it's a REAL transaction with mixed terms
   int _calculateTransactionValidationScore(String bodyLower, String sender) {
     int score = 0;
     
-    // +1 for each indicator present
+    // Core transaction indicators (+1 each)
     if (bodyLower.contains('account') || bodyLower.contains('a/c')) score++;
     if (bodyLower.contains('balance')) score++;
     if (bodyLower.contains('rs') || bodyLower.contains('inr') || bodyLower.contains('₹')) score++;
     if (bodyLower.contains('bank')) score++;
+    
+    // Transaction method indicators (+1 each)
     if (bodyLower.contains('card') && !bodyLower.contains('reward card')) score++;
-    if (bodyLower.contains('upi') || bodyLower.contains('@')) score++;
+    if (bodyLower.contains('upi') || bodyLower.contains('vpa') || bodyLower.contains('@')) score++;
+    
+    // Transaction action indicators (+1 each)
+    final transactionActions = ['debited', 'credited', 'spent', 'received', 'paid', 'withdrawn'];
+    if (transactionActions.any((action) => bodyLower.contains(action))) score++;
+    
+    // Transaction metadata (+1 each)
     if (bodyLower.contains('transaction') || bodyLower.contains('txn')) score++;
     if (bodyLower.contains('reference') || bodyLower.contains('ref')) score++;
-    if (sender.toLowerCase().contains('bank') || sender.toLowerCase().contains('bk')) score++;
     if (bodyLower.contains('date') || bodyLower.contains('time')) score++;
+    
+    // Sender validation (+1)
+    if (sender.toLowerCase().contains('bank') || sender.toLowerCase().contains('bk')) score++;
+    
+    // Mixed terms validation bonus (+2 if has action + bank + account)
+    bool hasAction = transactionActions.any((action) => bodyLower.contains(action));
+    bool hasBank = bodyLower.contains('bank');
+    bool hasAccount = bodyLower.contains('account') || bodyLower.contains('a/c');
+    
+    if (hasAction && hasBank && hasAccount) {
+      score += 2; // Bonus for having all three core elements
+    }
     
     return score;
   }
@@ -745,7 +764,16 @@ class SmsService {
     // Check for exact credit card phrases (not just individual words)
     for (final phrase in creditCardExactPhrases) {
       if (bodyLower.contains(phrase)) {
-        return 'CREDIT_CARD';
+        // Additional validation for Credit Card: must have transaction terms + bank/account
+        final ccTransactionTerms = ['debited', 'credited', 'spent', 'paid', 'charged', 'purchase'];
+        final ccContextTerms = ['bank', 'a/c', 'account', 'ending'];
+        
+        bool hasTransactionTerm = ccTransactionTerms.any((term) => bodyLower.contains(term));
+        bool hasContextTerm = ccContextTerms.any((term) => bodyLower.contains(term));
+        
+        if (hasTransactionTerm && hasContextTerm) {
+          return 'CREDIT_CARD';
+        }
       }
     }
     
@@ -754,7 +782,13 @@ class SmsService {
          bodyLower.contains('cc xxxx') || bodyLower.contains('cc ****')) &&
         (bodyLower.contains('spent') || bodyLower.contains('paid') || 
          bodyLower.contains('purchase') || bodyLower.contains('transaction'))) {
-      return 'CREDIT_CARD';
+      // Additional validation: must have bank/account context
+      final ccContextTerms = ['bank', 'a/c', 'account'];
+      bool hasContextTerm = ccContextTerms.any((term) => bodyLower.contains(term));
+      
+      if (hasContextTerm) {
+        return 'CREDIT_CARD';
+      }
     }
 
     // PRIORITY 2: UPI Detection (MUST have UPI specific indicators)
@@ -765,18 +799,29 @@ class SmsService {
       'upi transaction',
       'upi payment',
       'upi id',
-      'upi ref'
+      'upi ref',
+      'vpa',
+      'virtual payment address'
     ];
     
     final upiApps = ['paytm', 'phonepe', 'googlepay', 'google pay', 'bhim', 'amazon pay'];
     
-    // Check for exact UPI phrases or @ symbol (UPI ID indicator)
+    // Check for exact UPI phrases, apps, or @ symbol (UPI ID indicator)
     bool hasUpiPhrase = upiExactPhrases.any((phrase) => bodyLower.contains(phrase));
     bool hasUpiApp = upiApps.any((app) => bodyLower.contains(app));
     bool hasUpiId = bodyLower.contains('@') && !bodyLower.contains('email');
     
     if (hasUpiPhrase || hasUpiApp || hasUpiId) {
-      return 'UPI';
+      // Additional validation for UPI: must have transaction terms + bank/account
+      final upiTransactionTerms = ['debited', 'credited', 'received', 'paid', 'sent'];
+      final upiContextTerms = ['bank', 'a/c', 'account'];
+      
+      bool hasTransactionTerm = upiTransactionTerms.any((term) => bodyLower.contains(term));
+      bool hasContextTerm = upiContextTerms.any((term) => bodyLower.contains(term));
+      
+      if (hasTransactionTerm && hasContextTerm) {
+        return 'UPI';
+      }
     }
 
     // PRIORITY 3: Debit Card Detection (MUST have EXACT "debit card" phrase)
@@ -797,7 +842,16 @@ class SmsService {
     
     for (final phrase in debitCardExactPhrases) {
       if (bodyLower.contains(phrase)) {
-        return 'DEBIT_CARD';
+        // Additional validation for Debit Card: must have transaction terms + bank/account
+        final dcTransactionTerms = ['debited', 'withdrawn', 'spent', 'paid'];
+        final dcContextTerms = ['bank', 'a/c', 'account', 'ending'];
+        
+        bool hasTransactionTerm = dcTransactionTerms.any((term) => bodyLower.contains(term));
+        bool hasContextTerm = dcContextTerms.any((term) => bodyLower.contains(term));
+        
+        if (hasTransactionTerm && hasContextTerm) {
+          return 'DEBIT_CARD';
+        }
       }
     }
     
@@ -806,7 +860,13 @@ class SmsService {
          bodyLower.contains('dc xxxx') || bodyLower.contains('dc ****')) &&
         (bodyLower.contains('spent') || bodyLower.contains('paid') || 
          bodyLower.contains('withdrawal') || bodyLower.contains('transaction'))) {
-      return 'DEBIT_CARD';
+      // Additional validation: must have bank/account context
+      final dcContextTerms = ['bank', 'a/c', 'account'];
+      bool hasContextTerm = dcContextTerms.any((term) => bodyLower.contains(term));
+      
+      if (hasContextTerm) {
+        return 'DEBIT_CARD';
+      }
     }
 
     // PRIORITY 4: Net Banking Detection
@@ -955,6 +1015,16 @@ class SmsService {
         isCredit: false,
         bank: 'ICICI Bank',
         description: 'Rs.500.00 debited from ICICI Bank A/c **5678 via UPI to merchant. Available Balance: Rs.25000.00. Txn ID: UPI987654',
+        transactionType: 'UPI',
+      ),
+      Transaction(
+        id: 'demo_10',
+        sender: 'AD-SBI',
+        date: now.subtract(const Duration(days: 7)),
+        amount: 1200.00,
+        isCredit: true,
+        bank: 'State Bank of India',
+        description: 'Rs.1200.00 received via VPA to SBI Bank A/c **9012 from friend@oksbi. Available Balance: Rs.18000.00. Ref: VPA123456',
         transactionType: 'UPI',
       ),
     ];

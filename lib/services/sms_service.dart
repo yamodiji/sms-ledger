@@ -448,24 +448,50 @@ class SmsService {
     final validationScore = _calculateTransactionValidationScore(bodyLower, sender);
     if (validationScore < 3 && !hasConfirmationPhrase) return null;
 
-    // STEP 6: Determine if it's credit or debit
-    bool isCredit = hasCreditKeyword && !hasDebitKeyword;
+    // STEP 6: Determine transaction type and credit/debit FIRST
+    final transactionType = _universalTransactionTypeDetection(originalBody);
     
-    // If both credit and debit keywords are present, prioritize the more specific one
-    if (hasDebitKeyword && hasCreditKeyword) {
-      // Look for more specific patterns
-      if (bodyLower.contains('debited from') || bodyLower.contains('amount debited')) {
-        isCredit = false; // It's a debit
-      } else if (bodyLower.contains('credited to') || bodyLower.contains('amount credited')) {
-        isCredit = true; // It's a credit
+    // STEP 7: Determine if it's credit or debit based on transaction type and keywords
+    bool isCredit = false;
+    
+    if (transactionType == 'CREDIT_CARD') {
+      // For credit cards: if money is "spent" or "debited" = expense (isCredit = false)
+      // if money is "credited" or "cashback" = income (isCredit = true) 
+      if (bodyLower.contains('spent') || bodyLower.contains('paid') || 
+          bodyLower.contains('debited') || bodyLower.contains('purchase') ||
+          bodyLower.contains('charged')) {
+        isCredit = false; // Credit card spending is an expense
+      } else if (bodyLower.contains('credited') || bodyLower.contains('cashback') ||
+                 bodyLower.contains('refund') || bodyLower.contains('received')) {
+        isCredit = true; // Credit card credit is income
       } else {
-        return null; // Ambiguous, skip
+        return null; // Unclear credit card transaction
+      }
+    } else {
+      // For other transactions: normal logic
+      if (hasDebitKeyword && hasCreditKeyword) {
+        // Look for more specific patterns
+        if (bodyLower.contains('debited from') || bodyLower.contains('amount debited') ||
+            bodyLower.contains('withdrawn') || bodyLower.contains('spent')) {
+          isCredit = false; // It's a debit/expense
+        } else if (bodyLower.contains('credited to') || bodyLower.contains('amount credited') ||
+                   bodyLower.contains('received') || bodyLower.contains('deposited')) {
+          isCredit = true; // It's a credit/income
+        } else {
+          return null; // Ambiguous, skip
+        }
+      } else {
+        isCredit = hasCreditKeyword && !hasDebitKeyword;
       }
     }
 
-    // STEP 7: Extract bank name and transaction type
+    // STEP 8: Extract bank name with sender validation
     final bankName = _universalBankExtraction(sender, originalBody);
-    final transactionType = _universalTransactionTypeDetection(originalBody);
+    
+    // STEP 9: Validate that sender matches the bank mentioned in SMS
+    if (!_validateSenderBankMatch(sender, bankName, originalBody)) {
+      return null; // Sender doesn't match bank, might be spam
+    }
 
     return Transaction(
       id: '${message.date}_${sender.hashCode}',
@@ -496,6 +522,72 @@ class SmsService {
     if (bodyLower.contains('date') || bodyLower.contains('time')) score++;
     
     return score;
+  }
+
+  /// Validate that SMS sender matches the bank mentioned in the message
+  bool _validateSenderBankMatch(String sender, String extractedBankName, String smsBody) {
+    final senderLower = sender.toLowerCase();
+    final bankLower = extractedBankName.toLowerCase();
+    final bodyLower = smsBody.toLowerCase();
+    
+    // Extract key bank identifier from bank name
+    String bankIdentifier = '';
+    if (bankLower.contains('hdfc')) {
+      bankIdentifier = 'hdfc';
+    } else if (bankLower.contains('icici')) {
+      bankIdentifier = 'icici';
+    } else if (bankLower.contains('sbi') || bankLower.contains('state bank')) {
+      bankIdentifier = 'sbi';
+    } else if (bankLower.contains('axis')) {
+      bankIdentifier = 'axis';
+    }
+    else if (bankLower.contains('kotak')) {
+      bankIdentifier = 'kotak';
+    } else if (bankLower.contains('federal')) {
+      bankIdentifier = 'fed';
+    } else if (bankLower.contains('yes')) {
+      bankIdentifier = 'yes';
+    } else if (bankLower.contains('punjab') || bankLower.contains('pnb')) {
+      bankIdentifier = 'pnb';
+    } else if (bankLower.contains('canara')) {
+      bankIdentifier = 'canara';
+    } else if (bankLower.contains('baroda') || bankLower.contains('bob')) {
+      bankIdentifier = 'bob';
+    } else if (bankLower.contains('union')) {
+      bankIdentifier = 'union';
+    } else if (bankLower.contains('idbi')) {
+      bankIdentifier = 'idbi';
+    } else if (bankLower.contains('indusind')) {
+      bankIdentifier = 'indus';
+    } else if (bankLower.contains('rbl')) {
+      bankIdentifier = 'rbl';
+    } else if (bankLower.contains('bandhan')) {
+      bankIdentifier = 'bandhan';
+    } else if (bankLower.contains('dbs')) {
+      bankIdentifier = 'dbs';
+    } else if (bankLower.contains('central')) {
+      bankIdentifier = 'central';
+    }
+    
+    // Check if sender contains the bank identifier
+    if (bankIdentifier.isNotEmpty && senderLower.contains(bankIdentifier)) {
+      return true;
+    }
+    
+    // Check for common sender patterns
+    if (senderLower.contains('bank') || senderLower.contains('bk') || 
+        senderLower.contains('bnk') || senderLower.startsWith('ad-') ||
+        senderLower.startsWith('vm-') || senderLower.startsWith('tm-')) {
+      return true;
+    }
+    
+    // For transfers between banks, check if both banks are legitimate
+    if (bodyLower.contains('from') && bodyLower.contains('to') && 
+        (bodyLower.contains('bank') || bodyLower.contains('a/c'))) {
+      return true;
+    }
+    
+    return false;
   }
 
   /// UNIVERSAL bank name extraction - works with ANY bank
@@ -609,76 +701,76 @@ class SmsService {
     ).join(' ');
   }
 
-  /// UNIVERSAL transaction type detection - works with any SMS format
+  /// ENHANCED transaction type detection - ACCURATE with multiple term validation
   String _universalTransactionTypeDetection(String smsBody) {
     final bodyLower = smsBody.toLowerCase();
     
-    // Method 1: Look for explicit mentions of card types (TRANSACTION ONLY)
-    final creditCardPatterns = [
-      'credit card ending', 'credit-card ending', 'cc ending', 'cc****', 'cc xxxx',
-      'via credit card', 'using credit card', 'through credit card',
-      'on credit card', 'cc transaction', 'credit card transaction',
-      'spent on credit card', 'purchase on credit card', 'cc purchase',
-      'credit card payment', 'cc payment', 'paid via cc',
-      'spent via credit card', 'transaction on credit card',
-    ];
-
-    for (final pattern in creditCardPatterns) {
-      if (bodyLower.contains(pattern)) {
+    // PRIORITY 1: Credit Card Detection (MUST have multiple indicators)
+    final creditCardKeywords = ['credit card', 'credit-card', 'cc'];
+    final creditCardSupporting = ['ending', 'xxxx', '****', 'spent', 'purchase', 'payment', 'transaction'];
+    
+    bool hasCreditCardKeyword = creditCardKeywords.any((keyword) => bodyLower.contains(keyword));
+    bool hasCreditCardSupport = creditCardSupporting.any((support) => bodyLower.contains(support));
+    
+    if (hasCreditCardKeyword && hasCreditCardSupport) {
+      // Additional validation: must have transaction terms
+      final transactionTerms = ['debited', 'credited', 'spent', 'paid', 'charged', 'purchase'];
+      if (transactionTerms.any((term) => bodyLower.contains(term))) {
         return 'CREDIT_CARD';
       }
     }
 
-    final debitCardPatterns = [
-      'debit card', 'debit-card', 'dc ending', 'dc****', 'dc xxxx',
-      'via debit card', 'using debit card', 'through debit card',
-      'on debit card', 'dc transaction', 'debit card transaction',
-      'spent on debit card', 'purchase on debit card', 'dc purchase',
-      'debit card payment', 'dc payment', 'atm transaction',
-    ];
-
-    for (final pattern in debitCardPatterns) {
-      if (bodyLower.contains(pattern)) {
-        return 'DEBIT_CARD';
-      }
-    }
-
-    // Method 2: Look for UPI mentions (COMPREHENSIVE)
-    final upiPatterns = [
-      'upi', 'via upi', 'using upi', 'through upi', 'upi id', 'upi ref',
-      'upi transaction', 'upi payment', 'unified payments', 'paytm',
-      'phonepe', 'googlepay', 'google pay', 'bhim', 'amazon pay',
-      'mobikwik', 'freecharge', 'airtel money', 'jio money', 'ola money',
-      'uber money', 'whatsapp pay', 'samsung pay', 'mi pay',
-    ];
-
-    for (final pattern in upiPatterns) {
-      if (bodyLower.contains(pattern)) {
+    // PRIORITY 2: UPI Detection (MUST have UPI specific terms)
+    final upiKeywords = ['upi', '@'];
+    final upiApps = ['paytm', 'phonepe', 'googlepay', 'google pay', 'bhim', 'amazon pay'];
+    
+    bool hasUpiKeyword = upiKeywords.any((keyword) => bodyLower.contains(keyword));
+    bool hasUpiApp = upiApps.any((app) => bodyLower.contains(app));
+    
+    if (hasUpiKeyword || hasUpiApp) {
+      // Additional validation: must have transaction terms
+      final transactionTerms = ['debited', 'credited', 'received', 'paid', 'sent'];
+      if (transactionTerms.any((term) => bodyLower.contains(term))) {
         return 'UPI';
       }
     }
 
-    // Method 3: Look for generic card mentions (fallback to debit card)
-    final genericCardPatterns = [
-      'card ending', 'card no', 'card****', 'card xxxx', 'card number',
-      'atm card', 'bank card', 'your card', 'card transaction',
-    ];
-
-    for (final pattern in genericCardPatterns) {
-      if (bodyLower.contains(pattern)) {
-        return 'DEBIT_CARD';  // Default to debit card for generic card mentions
+    // PRIORITY 3: Debit Card Detection (MUST have multiple indicators)
+    final debitCardKeywords = ['debit card', 'debit-card', 'dc', 'atm'];
+    final debitCardSupporting = ['ending', 'xxxx', '****', 'withdrawal', 'transaction'];
+    
+    bool hasDebitCardKeyword = debitCardKeywords.any((keyword) => bodyLower.contains(keyword));
+    bool hasDebitCardSupport = debitCardSupporting.any((support) => bodyLower.contains(support));
+    
+    if (hasDebitCardKeyword && hasDebitCardSupport) {
+      // Additional validation: must have transaction terms
+      final transactionTerms = ['debited', 'withdrawn', 'spent', 'paid'];
+      if (transactionTerms.any((term) => bodyLower.contains(term))) {
+        return 'DEBIT_CARD';
       }
     }
 
-    // Method 4: Look for other transaction types
+    // PRIORITY 4: Net Banking Detection
     final netBankingPatterns = [
       'net banking', 'netbanking', 'internet banking', 'online banking',
-      'web banking', 'mobile banking', 'online transfer',
+      'web banking', 'mobile banking', 'online transfer', 'neft', 'rtgs', 'imps'
     ];
 
     for (final pattern in netBankingPatterns) {
       if (bodyLower.contains(pattern)) {
-        return 'OTHER';
+        // Additional validation: must have transaction terms
+        final transactionTerms = ['debited', 'credited', 'transferred', 'received'];
+        if (transactionTerms.any((term) => bodyLower.contains(term))) {
+          return 'OTHER';
+        }
+      }
+    }
+
+    // FALLBACK: If no specific type detected but has card mention
+    if (bodyLower.contains('card') && !bodyLower.contains('reward')) {
+      final transactionTerms = ['debited', 'credited', 'spent', 'paid'];
+      if (transactionTerms.any((term) => bodyLower.contains(term))) {
+        return 'DEBIT_CARD';  // Default to debit for generic card
       }
     }
 
@@ -753,6 +845,16 @@ class SmsService {
         transactionType: 'CREDIT_CARD',
       ),
       Transaction(
+        id: 'demo_7',
+        sender: 'VM-FEDBNK',
+        date: now.subtract(const Duration(days: 1, hours: 2)),
+        amount: 2000.00,
+        isCredit: true,
+        bank: 'Federal Bank',
+        description: 'Rs.2000.00 credited to Federal Bank A/c **4567 via UPI from friend. Available Balance: Rs.30000.00. Txn ID: FED123456',
+        transactionType: 'UPI',
+      ),
+      Transaction(
         id: 'demo_4',
         sender: 'DBS-BANK',
         date: now.subtract(const Duration(days: 2)),
@@ -781,6 +883,16 @@ class SmsService {
         bank: 'Unknown Bank',
         description: 'Rs.750.00 debited from Unknown Bank A/c **1111 via UPI. Balance: Rs.12000.00',
         transactionType: 'UPI',
+      ),
+      Transaction(
+        id: 'demo_8',
+        sender: 'AD-HDFC',
+        date: now.subtract(const Duration(days: 5)),
+        amount: 150.00,
+        isCredit: true,
+        bank: 'HDFC Bank',
+        description: 'Rs.150.00 cashback credited to credit card ending **1234 for purchase at Flipkart. If this transaction wasnt done by you, contact us.',
+        transactionType: 'CREDIT_CARD',
       ),
     ];
   }

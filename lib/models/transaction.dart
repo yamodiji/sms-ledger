@@ -39,6 +39,12 @@ class Transaction {
         return 'Credit Card';
       case 'UPI':
         return 'UPI';
+      case 'RTGS':
+        return 'RTGS';
+      case 'IMPS':
+        return 'IMPS';
+      case 'NEFT':
+        return 'NEFT';
       case 'OTHER':
         return 'Bank Transfer';
       default:

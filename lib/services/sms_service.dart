@@ -454,8 +454,8 @@ class SmsService {
     }
   }
 
-  /// Parse SMS message into transaction - ENHANCED STRICT VALIDATION
-  /// Only accepts messages with MANDATORY transaction action words + amount + account context
+  /// Parse SMS message into transaction - SMART BALANCED VALIDATION
+  /// Uses tiered validation: filters spam but accepts genuine transactions via multiple paths
   Transaction? _parseTransaction(SmsMessage message) {
     final originalBody = message.body ?? '';
     final bodyLower = originalBody.toLowerCase();
@@ -466,14 +466,23 @@ class SmsService {
     final isSpam = spamKeywords.any((keyword) => bodyLower.contains(keyword));
     if (isSpam) return null;
 
-    // STEP 2: MANDATORY check for ACTUAL transaction action words (STRICT)
-    final mandatoryTransactionActions = [
+    // STEP 2: Check for transaction action words (BALANCED - includes card variations)
+    final transactionActions = [
       'debited', 'credited', 'spent', 'received', 'paid', 'withdrawn', 
-      'deposited', 'transferred', 'charged', 'refund', 'cashback'
+      'deposited', 'transferred', 'charged', 'refund', 'cashback',
+      'purchase', 'transaction', 'used', 'made', 'successful'
     ];
     
-    final hasTransactionAction = mandatoryTransactionActions.any((action) => bodyLower.contains(action));
-    if (!hasTransactionAction) return null; // REJECT if no clear transaction action
+    // Also check for card-specific patterns
+    final cardPatterns = [
+      'card ending', 'card xxxx', 'card ****', 'card transaction',
+      'via card', 'using card', 'on card', 'through card'
+    ];
+    
+    final hasTransactionAction = transactionActions.any((action) => bodyLower.contains(action)) ||
+                                cardPatterns.any((pattern) => bodyLower.contains(pattern));
+    
+    if (!hasTransactionAction) return null; // REJECT if no transaction indicator
     
     // STEP 2B: Check if it contains transaction keywords (AFTER action validation)
     final hasDebitKeyword = debitKeywords.any((keyword) => bodyLower.contains(keyword));
@@ -485,19 +494,25 @@ class SmsService {
     final amount = _extractAmount(bodyLower);
     if (amount == null) return null;
 
-    // STEP 4: MANDATORY checks for genuine transaction indicators
+    // STEP 4: SMART TIERED VALIDATION - multiple paths to acceptance
     final hasConfirmationPhrase = transactionConfirmationPhrases.any((phrase) => bodyLower.contains(phrase));
     final hasAmountContext = bodyLower.contains('amount') || bodyLower.contains('amt') || 
                             bodyLower.contains('rs') || bodyLower.contains('inr') || bodyLower.contains('₹');
-    final hasAccountContext = bodyLower.contains('account') || bodyLower.contains('a/c') || 
-                             bodyLower.contains('balance') || bodyLower.contains('bank');
     
-    // STEP 5: STRICT validation - must have ALL core elements
+    // STEP 5: BALANCED validation - multiple acceptance criteria
     final validationScore = _calculateTransactionValidationScore(bodyLower, sender);
     
-    // REQUIRE: Transaction action + Amount context + Account context + (High score OR confirmation phrase)
-    if (!hasAmountContext || !hasAccountContext || (validationScore < 4 && !hasConfirmationPhrase)) {
-      return null; // REJECT if missing core transaction elements
+    // SMART ACCEPTANCE CRITERIA (ANY of these conditions):
+    // Path 1: High confidence - confirmation phrase + basic context
+    // Path 2: Good confidence - decent score + amount context  
+    // Path 3: Card transactions - card mention + transaction action + amount
+    final highConfidence = hasConfirmationPhrase && hasAmountContext;
+    final goodConfidence = validationScore >= 3 && hasAmountContext;
+    final cardTransaction = bodyLower.contains('card') && hasAmountContext && 
+                           (bodyLower.contains('ending') || bodyLower.contains('xxxx') || bodyLower.contains('****'));
+    
+    if (!highConfidence && !goodConfidence && !cardTransaction) {
+      return null; // REJECT only if none of the acceptance paths match
     }
 
     // STEP 6: Determine transaction type and credit/debit FIRST
@@ -566,9 +581,9 @@ class SmsService {
       return null; // Sender doesn't match bank, might be spam
     }
     
-    // STEP 10: Final verification - ensure this is a genuine bank transaction message
-    if (!_isBankTransactionMessage(originalBody, sender)) {
-      return null; // Additional safety check
+    // STEP 10: Final safety check - only reject obvious non-transactions
+    if (!_isLikelyBankTransaction(originalBody, sender)) {
+      return null; // Additional safety check for obvious spam
     }
 
     return Transaction(
@@ -583,39 +598,44 @@ class SmsService {
     );
   }
 
-  /// Calculate validation score to ensure it's a REAL transaction with mixed terms
+  /// Calculate validation score - BALANCED for card transactions
   int _calculateTransactionValidationScore(String bodyLower, String sender) {
     int score = 0;
     
     // Core transaction indicators (+1 each)
     if (bodyLower.contains('account') || bodyLower.contains('a/c')) score++;
     if (bodyLower.contains('balance')) score++;
-    if (bodyLower.contains('rs') || bodyLower.contains('inr') || bodyLower.contains('₹')) score++;
+    if (bodyLower.contains('rs') || bodyLower.contains('inr') || bodyLower.contains('₹') || bodyLower.contains('amount')) score++;
     if (bodyLower.contains('bank')) score++;
     
-    // Transaction method indicators (+1 each)
-    if (bodyLower.contains('card') && !bodyLower.contains('reward card')) score++;
+    // Transaction method indicators (+2 for cards, +1 for others)
+    if (bodyLower.contains('card') && !bodyLower.contains('reward card')) {
+      score += 2; // Higher score for card transactions
+      if (bodyLower.contains('ending') || bodyLower.contains('xxxx') || bodyLower.contains('****')) {
+        score += 1; // Bonus for card number patterns
+      }
+    }
     if (bodyLower.contains('upi') || bodyLower.contains('vpa') || bodyLower.contains('@')) score++;
     
-    // Transaction action indicators (+1 each)
-    final transactionActions = ['debited', 'credited', 'spent', 'received', 'paid', 'withdrawn'];
+    // Transaction action indicators (+1 each, expanded list)
+    final transactionActions = ['debited', 'credited', 'spent', 'received', 'paid', 'withdrawn', 'purchase', 'transaction', 'charged'];
     if (transactionActions.any((action) => bodyLower.contains(action))) score++;
     
     // Transaction metadata (+1 each)
     if (bodyLower.contains('transaction') || bodyLower.contains('txn')) score++;
-    if (bodyLower.contains('reference') || bodyLower.contains('ref')) score++;
-    if (bodyLower.contains('date') || bodyLower.contains('time')) score++;
+    if (bodyLower.contains('reference') || bodyLower.contains('ref') || bodyLower.contains('id')) score++;
+    if (bodyLower.contains('date') || bodyLower.contains('time') || bodyLower.contains('on ')) score++;
     
     // Sender validation (+1)
     if (sender.toLowerCase().contains('bank') || sender.toLowerCase().contains('bk')) score++;
     
-    // Mixed terms validation bonus (+2 if has action + bank + account)
+    // Context bonuses
     bool hasAction = transactionActions.any((action) => bodyLower.contains(action));
     bool hasBank = bodyLower.contains('bank');
-    bool hasAccount = bodyLower.contains('account') || bodyLower.contains('a/c');
+    bool hasAccount = bodyLower.contains('account') || bodyLower.contains('a/c') || bodyLower.contains('card');
     
-    if (hasAction && hasBank && hasAccount) {
-      score += 2; // Bonus for having all three core elements
+    if (hasAction && (hasBank || hasAccount)) {
+      score += 1; // Bonus for having action + context (relaxed)
     }
     
     return score;
@@ -870,42 +890,37 @@ class SmsService {
     return 'Unknown Bank';
   }
 
-  /// Final check to ensure this is a genuine bank transaction message
-  bool _isBankTransactionMessage(String smsBody, String sender) {
+  /// Lenient check - only reject obvious non-transaction messages
+  bool _isLikelyBankTransaction(String smsBody, String sender) {
     final bodyLower = smsBody.toLowerCase();
     final senderLower = sender.toLowerCase();
     
-    // Must have transaction structure indicators
-    final transactionStructure = [
-      'account', 'a/c', 'card ending', 'card xxxx', 'card ****', 
-      'balance', 'available', 'total', 'current'
+    // REJECT obvious non-transaction phrases (LENIENT - only clear spam)
+    final obviousNonTransactionPhrases = [
+      'thank you for choosing', 'visit our website', 'download our app',
+      'register now', 'click the link', 'terms and conditions',
+      'call customer care', 'visit nearest branch', 'apply now'
     ];
     
-    final hasStructure = transactionStructure.any((indicator) => bodyLower.contains(indicator));
-    if (!hasStructure) return false;
+    final hasObviousSpam = obviousNonTransactionPhrases.any((phrase) => bodyLower.contains(phrase));
+    if (hasObviousSpam) return false;
     
-    // Must have proper financial amount format
-    final hasProperAmount = RegExp(r'(?:rs\.?|inr|₹|amount)\s*\d+', caseSensitive: false).hasMatch(bodyLower);
-    if (!hasProperAmount) return false;
-    
-    // Must be from bank-like sender
+    // ACCEPT if sender looks bank-like (LENIENT)
     final isBankSender = senderLower.contains('bank') || senderLower.contains('bk') || 
                         senderLower.contains('bnk') || senderLower.startsWith('ad-') ||
                         senderLower.startsWith('vm-') || senderLower.startsWith('tm-') ||
-                        senderLower.length <= 10; // Short codes are usually from banks
-    if (!isBankSender) return false;
+                        senderLower.length <= 12; // Increased length threshold
     
-    // Additional safety: reject if contains common non-transaction phrases
-    final nonTransactionPhrases = [
-      'thank you for choosing', 'visit our website', 'call customer care',
-      'download our app', 'register now', 'activate your', 'update your',
-      'verify your', 'confirm your', 'click the link', 'terms and conditions'
-    ];
+    if (!isBankSender) {
+      // If sender doesn't look bank-like, check if message has strong transaction indicators
+      final strongTransactionIndicators = [
+        'account', 'a/c', 'balance', 'available', 'card ending',
+        'card xxxx', 'card ****', 'transaction', 'txn'
+      ];
+      return strongTransactionIndicators.any((indicator) => bodyLower.contains(indicator));
+    }
     
-    final hasNonTransactionPhrase = nonTransactionPhrases.any((phrase) => bodyLower.contains(phrase));
-    if (hasNonTransactionPhrase) return false;
-    
-    return true;
+    return true; // Accept by default if bank-like sender
   }
 
   /// Check if bank name matches sender characters
@@ -1247,6 +1262,16 @@ class SmsService {
         bank: 'Canara Bank',
         description: 'An amount of INR 3,475.00 has been credited to XXXX0224 on 16/06/2025 towards NEFT by Sender PHONEPE PRIVATE LIMI FOR PHONE, IFSC YESB0000001, Sender A/c XXXX0025, YES BANK LTD, Worli, Mumbai, UTR YESPH51670217794, Total Avail. Bal INR 9241.42- Canara Bank',
         transactionType: 'OTHER',
+      ),
+      Transaction(
+        id: 'demo_12',
+        sender: 'AD-HDFCBK',
+        date: now.subtract(const Duration(days: 9)),
+        amount: 1250.00,
+        isCredit: false,
+        bank: 'HDFC Bank',
+        description: 'INR 1250.00 spent on HDFC Bank Credit Card ending xxxx9876 on 17-Jan-25 at AMAZON. Available Credit Limit: INR 45000.00',
+        transactionType: 'CREDIT_CARD',
       ),
     ];
   }

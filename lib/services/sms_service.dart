@@ -472,36 +472,74 @@ class SmsService {
     final transactionType = _simpleTransactionTypeDetection(bodyLower);
     if (transactionType == 'UNKNOWN') return null; // No clear transaction type found
 
-    // STEP 3: SECOND - Check for transaction actions
+    // STEP 3: SECOND - Check for transaction actions (including phrases)
     final transactionActions = ['debited', 'credited', 'spent', 'received', 'paid', 'withdrawn'];
-    final hasTransactionAction = transactionActions.any((action) => bodyLower.contains(action));
+    final transactionPhrases = [
+      'received a payment', 'payment received', 'amount debited', 'amount credited',
+      'debited from', 'credited to', 'debited by', 'credited by'
+    ];
+    
+    final hasTransactionAction = transactionActions.any((action) => bodyLower.contains(action)) ||
+                                transactionPhrases.any((phrase) => bodyLower.contains(phrase));
     if (!hasTransactionAction) return null; // Must have clear action
 
-    // STEP 4: THIRD - Check for account/card patterns (xxxx, a/c, account)
+    // STEP 4: THIRD - Check for account/card patterns (xxxx, a/c, account, card numbers)
     final accountPatterns = ['a/c', 'account', 'xxxx', '****', 'ending'];
-    final hasAccountPattern = accountPatterns.any((pattern) => bodyLower.contains(pattern));
+    
+    // Also check for card number patterns like "xxxx1234", "****1234", etc.
+    final cardNumberPattern = RegExp(r'(?:xxxx|x{4}|\*{4})\d{2,4}', caseSensitive: false);
+    final hasCardNumber = cardNumberPattern.hasMatch(bodyLower);
+    
+    final hasAccountPattern = accountPatterns.any((pattern) => bodyLower.contains(pattern)) || hasCardNumber;
     if (!hasAccountPattern) return null; // Must have account/card reference
 
     // STEP 5: FOURTH - Extract amount (must have valid amount)
-    final amount = _extractAmount(bodyLower);
+    final amount = _extractAmountFlexible(originalBody);
     if (amount == null) return null;
 
-    // STEP 6: FIFTH - Determine if it's credit or debit based on simple action words
+    // STEP 6: FIFTH - Determine if it's credit or debit based on transaction type and actions
     bool isCredit = false;
     
-    // Simple approach: Look for clear action words
-    final creditActions = ['credited', 'received', 'deposited', 'refund', 'cashback'];
-    final debitActions = ['debited', 'spent', 'paid', 'withdrawn'];
-    
-    final hasCreditAction = creditActions.any((action) => bodyLower.contains(action));
-    final hasDebitAction = debitActions.any((action) => bodyLower.contains(action));
-    
-    if (hasCreditAction && !hasDebitAction) {
-      isCredit = true; // Money coming in
-    } else if (hasDebitAction && !hasCreditAction) {
-      isCredit = false; // Money going out
+    // Special handling for credit card transactions
+    if (transactionType == 'CREDIT_CARD') {
+      // For credit cards: "received a payment" = expense (bill payment received by bank)
+      // Regular "credited" = income (cashback, refund)
+      final creditCardExpenses = [
+        'received a payment', 'payment received', 'debited', 'spent', 'paid', 'withdrawn',
+        'purchase', 'transaction', 'charged'
+      ];
+      final creditCardIncome = ['credited', 'refund', 'cashback', 'reward', 'reversal'];
+      
+      final hasExpense = creditCardExpenses.any((action) => bodyLower.contains(action));
+      final hasIncome = creditCardIncome.any((action) => bodyLower.contains(action));
+      
+      if (hasExpense && !hasIncome) {
+        isCredit = false; // Credit card expense
+      } else if (hasIncome && !hasExpense) {
+        isCredit = true; // Credit card income (cashback/refund)
+      } else {
+        return null; // Ambiguous credit card transaction
+      }
     } else {
-      return null; // Ambiguous or conflicting actions
+      // For other transactions: Standard logic
+      final creditActions = ['credited', 'received', 'deposited', 'refund', 'cashback', 'credited to', 'credited by'];
+      final debitActions = ['debited', 'spent', 'paid', 'withdrawn', 'debited from', 'debited by'];
+      
+      // Special case: "received a payment" for non-credit cards = income
+      if (bodyLower.contains('received a payment') || bodyLower.contains('payment received')) {
+        isCredit = true; // Regular income
+      } else {
+        final hasCreditAction = creditActions.any((action) => bodyLower.contains(action));
+        final hasDebitAction = debitActions.any((action) => bodyLower.contains(action));
+        
+        if (hasCreditAction && !hasDebitAction) {
+          isCredit = true; // Money coming in
+        } else if (hasDebitAction && !hasCreditAction) {
+          isCredit = false; // Money going out
+        } else {
+          return null; // Ambiguous or conflicting actions
+        }
+      }
     }
 
     // STEP 7: SIXTH - Extract bank name (simple approach)
@@ -796,37 +834,83 @@ class SmsService {
 
 
 
-  /// Extract amount from SMS body (UNIVERSAL PATTERNS)
-  double? _extractAmount(String body) {
+
+
+  /// Extract amount from SMS body (FLEXIBLE PATTERNS) - handles cases without INR/Rs
+  double? _extractAmountFlexible(String body) {
+    final bodyLower = body.toLowerCase();
+    
     final patterns = [
-      // Indian Rupee patterns
+      // 1. Standard currency patterns (with INR/Rs/₹)
       r'rs\.?\s*(\d+(?:,\d+)*(?:\.\d{2})?)',
       r'inr\s*(\d+(?:,\d+)*(?:\.\d{2})?)',
-      r'amount\s*rs\.?\s*(\d+(?:,\d+)*(?:\.\d{2})?)',
-      r'(\d+(?:,\d+)*(?:\.\d{2})?)\s*(?:rs|inr)',
       r'₹\s*(\d+(?:,\d+)*(?:\.\d{2})?)',
-      r'(\d+(?:,\d+)*(?:\.\d{2})?)\s*₹',
-      // Generic amount patterns
-      r'amount\s*(?:of\s*)?(\d+(?:,\d+)*(?:\.\d{2})?)',
-      r'amt\s*(?:of\s*)?(\d+(?:,\d+)*(?:\.\d{2})?)',
-      r'sum\s*(?:of\s*)?(\d+(?:,\d+)*(?:\.\d{2})?)',
-      // Transaction amount patterns
+      r'(\d+(?:,\d+)*(?:\.\d{2})?)\s*(?:rs|inr|₹)',
+      
+      // 2. Transaction phrases with amounts
+      r'amount\s*(?:of\s*)?(?:rs\.?|inr|₹)?\s*(\d+(?:,\d+)*(?:\.\d{2})?)',
+      r'amt\s*(?:of\s*)?(?:rs\.?|inr|₹)?\s*(\d+(?:,\d+)*(?:\.\d{2})?)',
+      r'sum\s*(?:of\s*)?(?:rs\.?|inr|₹)?\s*(\d+(?:,\d+)*(?:\.\d{2})?)',
+      
+      // 3. Action words with amounts (with or without currency)
       r'(?:debited|credited|paid|received|spent|withdrawn|deposited)\s*(?:rs\.?|inr|₹)?\s*(\d+(?:,\d+)*(?:\.\d{2})?)',
       r'(\d+(?:,\d+)*(?:\.\d{2})?)\s*(?:debited|credited|paid|received|spent|withdrawn|deposited)',
+      
+      // 4. Payment phrases with amounts
+      r'(?:received\s+a\s+)?payment\s*(?:of\s*)?(?:rs\.?|inr|₹)?\s*(\d+(?:,\d+)*(?:\.\d{2})?)',
+      r'(\d+(?:,\d+)*(?:\.\d{2})?)\s*(?:received|payment)',
+      
+      // 5. FLEXIBLE: Numbers followed by "debited by", "credited to", etc.
+      r'(\d+(?:,\d+)*(?:\.\d{2})?)\s*(?:debited\s+by|credited\s+to|debited\s+from|credited\s+by)',
+      r'(?:debited\s+by|credited\s+to|debited\s+from|credited\s+by)\s*(\d+(?:,\d+)*(?:\.\d{2})?)',
+      
+      // 6. FLEXIBLE: Numbers near transaction keywords (without currency)
+      r'(?:transaction|purchase|transfer|bill)\s*(?:of\s*)?(\d+(?:,\d+)*(?:\.\d{2})?)',
+      r'(\d+(?:,\d+)*(?:\.\d{2})?)\s*(?:transaction|purchase|transfer|bill)',
+      
+      // 7. FLEXIBLE: Standalone numbers in financial context (minimum ₹10)
+      r'(?:^|\s)(\d{2,}(?:,\d+)*(?:\.\d{2})?)(?=\s|$)',  // At least 2 digits
     ];
 
     for (final pattern in patterns) {
       final regex = RegExp(pattern, caseSensitive: false);
-      final match = regex.firstMatch(body);
-      if (match != null) {
+      final matches = regex.allMatches(bodyLower);
+      
+      for (final match in matches) {
         final amountStr = match.group(1)?.replaceAll(',', '') ?? '';
         final amount = double.tryParse(amountStr);
-        if (amount != null && amount > 0) {
-          return amount;
+        
+        if (amount != null && amount >= 10.0) {  // Minimum ₹10 to avoid false positives
+          // Additional validation: ensure it's in a financial context
+          if (_isAmountInFinancialContext(body, match.start, match.end)) {
+            return amount;
+          }
         }
       }
     }
+    
     return null;
+  }
+
+  /// Check if amount is in a financial context (not just random numbers)
+  bool _isAmountInFinancialContext(String body, int start, int end) {
+    final bodyLower = body.toLowerCase();
+    
+    // Get text around the amount (±50 characters)
+    final contextStart = (start - 50).clamp(0, body.length);
+    final contextEnd = (end + 50).clamp(0, body.length);
+    final context = bodyLower.substring(contextStart, contextEnd);
+    
+    // Financial keywords that indicate money context
+    final financialKeywords = [
+      'bank', 'account', 'a/c', 'card', 'upi', 'transaction', 'payment', 'balance',
+      'credit', 'debit', 'spent', 'paid', 'received', 'withdraw', 'deposit',
+      'transfer', 'bill', 'purchase', 'refund', 'cashback', 'salary', 'amount',
+      'rupee', 'rs', 'inr', '₹', 'available', 'limit', 'ending', 'via'
+    ];
+    
+    // Check if context contains financial keywords
+    return financialKeywords.any((keyword) => context.contains(keyword));
   }
 
   /// Get demo transactions for testing - shows ANTI-SPAM filtering

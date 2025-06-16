@@ -451,36 +451,57 @@ class SmsService {
     // STEP 6: Determine transaction type and credit/debit FIRST
     final transactionType = _universalTransactionTypeDetection(originalBody);
     
-    // STEP 7: Determine if it's credit or debit based on transaction type and keywords
+    // STEP 7: Determine if it's credit or debit based on transaction type and SPECIFIC keywords
     bool isCredit = false;
     
     if (transactionType == 'CREDIT_CARD') {
-      // For credit cards: if money is "spent" or "debited" = expense (isCredit = false)
-      // if money is "credited" or "cashback" = income (isCredit = true) 
-      if (bodyLower.contains('spent') || bodyLower.contains('paid') || 
-          bodyLower.contains('debited') || bodyLower.contains('purchase') ||
-          bodyLower.contains('charged')) {
+      // For credit cards: Look for SPECIFIC expense/income indicators
+      final expenseIndicators = [
+        'spent via credit card',
+        'paid via credit card', 
+        'purchase on credit card',
+        'charged on credit card',
+        'debited from credit card',
+        'transaction on credit card'
+      ];
+      
+      final incomeIndicators = [
+        'cashback credited',
+        'refund credited', 
+        'reward credited',
+        'points credited',
+        'amount refunded'
+      ];
+      
+      bool isExpense = expenseIndicators.any((indicator) => bodyLower.contains(indicator)) ||
+                      (bodyLower.contains('credit card') && 
+                       (bodyLower.contains('spent') || bodyLower.contains('paid') || 
+                        bodyLower.contains('purchase') || bodyLower.contains('charged')));
+      
+      bool isIncome = incomeIndicators.any((indicator) => bodyLower.contains(indicator));
+      
+      if (isExpense && !isIncome) {
         isCredit = false; // Credit card spending is an expense
-      } else if (bodyLower.contains('credited') || bodyLower.contains('cashback') ||
-                 bodyLower.contains('refund') || bodyLower.contains('received')) {
-        isCredit = true; // Credit card credit is income
+      } else if (isIncome && !isExpense) {
+        isCredit = true; // Credit card cashback/refund is income
       } else {
-        return null; // Unclear credit card transaction
+        return null; // Unclear or conflicting credit card transaction
       }
     } else {
-      // For other transactions: normal logic
+      // For other transactions (UPI, Debit Card, etc.): Use standard logic
       if (hasDebitKeyword && hasCreditKeyword) {
-        // Look for more specific patterns
+        // Look for more specific patterns to resolve conflict
         if (bodyLower.contains('debited from') || bodyLower.contains('amount debited') ||
-            bodyLower.contains('withdrawn') || bodyLower.contains('spent')) {
+            bodyLower.contains('withdrawn from') || bodyLower.contains('spent from')) {
           isCredit = false; // It's a debit/expense
         } else if (bodyLower.contains('credited to') || bodyLower.contains('amount credited') ||
-                   bodyLower.contains('received') || bodyLower.contains('deposited')) {
+                   bodyLower.contains('received in') || bodyLower.contains('deposited to')) {
           isCredit = true; // It's a credit/income
         } else {
           return null; // Ambiguous, skip
         }
       } else {
+        // Clear case: only one type of keyword present
         isCredit = hasCreditKeyword && !hasDebitKeyword;
       }
     }
@@ -701,77 +722,109 @@ class SmsService {
     ).join(' ');
   }
 
-  /// ENHANCED transaction type detection - ACCURATE with multiple term validation
+  /// PRECISE transaction type detection - EXACT phrase matching
   String _universalTransactionTypeDetection(String smsBody) {
     final bodyLower = smsBody.toLowerCase();
     
-    // PRIORITY 1: Credit Card Detection (MUST have multiple indicators)
-    final creditCardKeywords = ['credit card', 'credit-card', 'cc'];
-    final creditCardSupporting = ['ending', 'xxxx', '****', 'spent', 'purchase', 'payment', 'transaction'];
+    // PRIORITY 1: Credit Card Detection (MUST have EXACT "credit card" phrase)
+    final creditCardExactPhrases = [
+      'credit card ending',
+      'credit card xxxx', 
+      'credit card ****',
+      'credit card transaction',
+      'via credit card',
+      'using credit card',
+      'through credit card',
+      'on credit card',
+      'spent via credit card',
+      'paid via credit card',
+      'purchase on credit card',
+      'transaction on credit card'
+    ];
     
-    bool hasCreditCardKeyword = creditCardKeywords.any((keyword) => bodyLower.contains(keyword));
-    bool hasCreditCardSupport = creditCardSupporting.any((support) => bodyLower.contains(support));
-    
-    if (hasCreditCardKeyword && hasCreditCardSupport) {
-      // Additional validation: must have transaction terms
-      final transactionTerms = ['debited', 'credited', 'spent', 'paid', 'charged', 'purchase'];
-      if (transactionTerms.any((term) => bodyLower.contains(term))) {
+    // Check for exact credit card phrases (not just individual words)
+    for (final phrase in creditCardExactPhrases) {
+      if (bodyLower.contains(phrase)) {
         return 'CREDIT_CARD';
       }
     }
-
-    // PRIORITY 2: UPI Detection (MUST have UPI specific terms)
-    final upiKeywords = ['upi', '@'];
-    final upiApps = ['paytm', 'phonepe', 'googlepay', 'google pay', 'bhim', 'amazon pay'];
     
-    bool hasUpiKeyword = upiKeywords.any((keyword) => bodyLower.contains(keyword));
-    bool hasUpiApp = upiApps.any((app) => bodyLower.contains(app));
-    
-    if (hasUpiKeyword || hasUpiApp) {
-      // Additional validation: must have transaction terms
-      final transactionTerms = ['debited', 'credited', 'received', 'paid', 'sent'];
-      if (transactionTerms.any((term) => bodyLower.contains(term))) {
-        return 'UPI';
-      }
+    // Also check for "credit-card" or "cc" with supporting terms
+    if ((bodyLower.contains('credit-card') || bodyLower.contains('cc ending') || 
+         bodyLower.contains('cc xxxx') || bodyLower.contains('cc ****')) &&
+        (bodyLower.contains('spent') || bodyLower.contains('paid') || 
+         bodyLower.contains('purchase') || bodyLower.contains('transaction'))) {
+      return 'CREDIT_CARD';
     }
 
-    // PRIORITY 3: Debit Card Detection (MUST have multiple indicators)
-    final debitCardKeywords = ['debit card', 'debit-card', 'dc', 'atm'];
-    final debitCardSupporting = ['ending', 'xxxx', '****', 'withdrawal', 'transaction'];
+    // PRIORITY 2: UPI Detection (MUST have UPI specific indicators)
+    final upiExactPhrases = [
+      'via upi',
+      'using upi', 
+      'through upi',
+      'upi transaction',
+      'upi payment',
+      'upi id',
+      'upi ref'
+    ];
     
-    bool hasDebitCardKeyword = debitCardKeywords.any((keyword) => bodyLower.contains(keyword));
-    bool hasDebitCardSupport = debitCardSupporting.any((support) => bodyLower.contains(support));
+    final upiApps = ['paytm', 'phonepe', 'googlepay', 'google pay', 'bhim', 'amazon pay'];
     
-    if (hasDebitCardKeyword && hasDebitCardSupport) {
-      // Additional validation: must have transaction terms
-      final transactionTerms = ['debited', 'withdrawn', 'spent', 'paid'];
-      if (transactionTerms.any((term) => bodyLower.contains(term))) {
+    // Check for exact UPI phrases or @ symbol (UPI ID indicator)
+    bool hasUpiPhrase = upiExactPhrases.any((phrase) => bodyLower.contains(phrase));
+    bool hasUpiApp = upiApps.any((app) => bodyLower.contains(app));
+    bool hasUpiId = bodyLower.contains('@') && !bodyLower.contains('email');
+    
+    if (hasUpiPhrase || hasUpiApp || hasUpiId) {
+      return 'UPI';
+    }
+
+    // PRIORITY 3: Debit Card Detection (MUST have EXACT "debit card" phrase)
+    final debitCardExactPhrases = [
+      'debit card ending',
+      'debit card xxxx',
+      'debit card ****', 
+      'debit card transaction',
+      'via debit card',
+      'using debit card',
+      'through debit card',
+      'on debit card',
+      'spent via debit card',
+      'paid via debit card',
+      'atm transaction',
+      'atm withdrawal'
+    ];
+    
+    for (final phrase in debitCardExactPhrases) {
+      if (bodyLower.contains(phrase)) {
         return 'DEBIT_CARD';
       }
     }
+    
+    // Also check for "debit-card" or "dc" with supporting terms
+    if ((bodyLower.contains('debit-card') || bodyLower.contains('dc ending') || 
+         bodyLower.contains('dc xxxx') || bodyLower.contains('dc ****')) &&
+        (bodyLower.contains('spent') || bodyLower.contains('paid') || 
+         bodyLower.contains('withdrawal') || bodyLower.contains('transaction'))) {
+      return 'DEBIT_CARD';
+    }
 
     // PRIORITY 4: Net Banking Detection
-    final netBankingPatterns = [
+    final netBankingExactPhrases = [
       'net banking', 'netbanking', 'internet banking', 'online banking',
       'web banking', 'mobile banking', 'online transfer', 'neft', 'rtgs', 'imps'
     ];
 
-    for (final pattern in netBankingPatterns) {
-      if (bodyLower.contains(pattern)) {
-        // Additional validation: must have transaction terms
-        final transactionTerms = ['debited', 'credited', 'transferred', 'received'];
-        if (transactionTerms.any((term) => bodyLower.contains(term))) {
-          return 'OTHER';
-        }
+    for (final phrase in netBankingExactPhrases) {
+      if (bodyLower.contains(phrase)) {
+        return 'OTHER';
       }
     }
 
-    // FALLBACK: If no specific type detected but has card mention
-    if (bodyLower.contains('card') && !bodyLower.contains('reward')) {
-      final transactionTerms = ['debited', 'credited', 'spent', 'paid'];
-      if (transactionTerms.any((term) => bodyLower.contains(term))) {
-        return 'DEBIT_CARD';  // Default to debit for generic card
-      }
+    // FALLBACK: Generic card mention (default to debit)
+    if ((bodyLower.contains('card ending') || bodyLower.contains('card xxxx') || 
+         bodyLower.contains('card ****')) && !bodyLower.contains('reward')) {
+      return 'DEBIT_CARD';  // Default to debit for generic card
     }
 
     return 'OTHER';
@@ -893,6 +946,16 @@ class SmsService {
         bank: 'HDFC Bank',
         description: 'Rs.150.00 cashback credited to credit card ending **1234 for purchase at Flipkart. If this transaction wasnt done by you, contact us.',
         transactionType: 'CREDIT_CARD',
+      ),
+      Transaction(
+        id: 'demo_9',
+        sender: 'VM-ICICI',
+        date: now.subtract(const Duration(days: 6)),
+        amount: 500.00,
+        isCredit: false,
+        bank: 'ICICI Bank',
+        description: 'Rs.500.00 debited from ICICI Bank A/c **5678 via UPI to merchant. Available Balance: Rs.25000.00. Txn ID: UPI987654',
+        transactionType: 'UPI',
       ),
     ];
   }

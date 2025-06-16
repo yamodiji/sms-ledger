@@ -82,6 +82,40 @@ class SmsService {
     'promotional',
     'marketing',
     'advertisement',
+    'download app',
+    'install app',
+    'update app',
+    'verify mobile',
+    'register mobile',
+    'activate card',
+    'block card',
+    'unblock card',
+    'pin generation',
+    'otp',
+    'one time password',
+    'temporary block',
+    'statement',
+    'cheque book',
+    'passbook',
+    'kyc',
+    'know your customer',
+    'document upload',
+    'visit nearest branch',
+    'customer care',
+    'helpline',
+    'toll free',
+    'website',
+    'portal',
+    'login',
+    'username',
+    'password',
+    'security',
+    'fraud alert',
+    'do not share',
+    'never share',
+    'phishing',
+    'fake',
+    'suspicious',
   ];
 
   // UNIVERSAL bank name mapping - covers ALL major Indian banks
@@ -420,7 +454,8 @@ class SmsService {
     }
   }
 
-  /// Parse SMS message into transaction - ANTI-SPAM VALIDATION
+  /// Parse SMS message into transaction - ENHANCED STRICT VALIDATION
+  /// Only accepts messages with MANDATORY transaction action words + amount + account context
   Transaction? _parseTransaction(SmsMessage message) {
     final originalBody = message.body ?? '';
     final bodyLower = originalBody.toLowerCase();
@@ -431,7 +466,16 @@ class SmsService {
     final isSpam = spamKeywords.any((keyword) => bodyLower.contains(keyword));
     if (isSpam) return null;
 
-    // STEP 2: Check if it contains transaction keywords
+    // STEP 2: MANDATORY check for ACTUAL transaction action words (STRICT)
+    final mandatoryTransactionActions = [
+      'debited', 'credited', 'spent', 'received', 'paid', 'withdrawn', 
+      'deposited', 'transferred', 'charged', 'refund', 'cashback'
+    ];
+    
+    final hasTransactionAction = mandatoryTransactionActions.any((action) => bodyLower.contains(action));
+    if (!hasTransactionAction) return null; // REJECT if no clear transaction action
+    
+    // STEP 2B: Check if it contains transaction keywords (AFTER action validation)
     final hasDebitKeyword = debitKeywords.any((keyword) => bodyLower.contains(keyword));
     final hasCreditKeyword = creditKeywords.any((keyword) => bodyLower.contains(keyword));
     
@@ -441,12 +485,20 @@ class SmsService {
     final amount = _extractAmount(bodyLower);
     if (amount == null) return null;
 
-    // STEP 4: Check for transaction confirmation phrases (REAL transaction indicators)
+    // STEP 4: MANDATORY checks for genuine transaction indicators
     final hasConfirmationPhrase = transactionConfirmationPhrases.any((phrase) => bodyLower.contains(phrase));
+    final hasAmountContext = bodyLower.contains('amount') || bodyLower.contains('amt') || 
+                            bodyLower.contains('rs') || bodyLower.contains('inr') || bodyLower.contains('₹');
+    final hasAccountContext = bodyLower.contains('account') || bodyLower.contains('a/c') || 
+                             bodyLower.contains('balance') || bodyLower.contains('bank');
     
-    // STEP 5: Multi-keyword validation - must have multiple indicators
+    // STEP 5: STRICT validation - must have ALL core elements
     final validationScore = _calculateTransactionValidationScore(bodyLower, sender);
-    if (validationScore < 3 && !hasConfirmationPhrase) return null;
+    
+    // REQUIRE: Transaction action + Amount context + Account context + (High score OR confirmation phrase)
+    if (!hasAmountContext || !hasAccountContext || (validationScore < 4 && !hasConfirmationPhrase)) {
+      return null; // REJECT if missing core transaction elements
+    }
 
     // STEP 6: Determine transaction type and credit/debit FIRST
     final transactionType = _universalTransactionTypeDetection(originalBody);
@@ -512,6 +564,11 @@ class SmsService {
     // STEP 9: Validate that sender matches the bank mentioned in SMS
     if (!_validateSenderBankMatch(sender, bankName, originalBody)) {
       return null; // Sender doesn't match bank, might be spam
+    }
+    
+    // STEP 10: Final verification - ensure this is a genuine bank transaction message
+    if (!_isBankTransactionMessage(originalBody, sender)) {
+      return null; // Additional safety check
     }
 
     return Transaction(
@@ -811,6 +868,44 @@ class SmsService {
     }
 
     return 'Unknown Bank';
+  }
+
+  /// Final check to ensure this is a genuine bank transaction message
+  bool _isBankTransactionMessage(String smsBody, String sender) {
+    final bodyLower = smsBody.toLowerCase();
+    final senderLower = sender.toLowerCase();
+    
+    // Must have transaction structure indicators
+    final transactionStructure = [
+      'account', 'a/c', 'card ending', 'card xxxx', 'card ****', 
+      'balance', 'available', 'total', 'current'
+    ];
+    
+    final hasStructure = transactionStructure.any((indicator) => bodyLower.contains(indicator));
+    if (!hasStructure) return false;
+    
+    // Must have proper financial amount format
+    final hasProperAmount = RegExp(r'(?:rs\.?|inr|₹|amount)\s*\d+', caseSensitive: false).hasMatch(bodyLower);
+    if (!hasProperAmount) return false;
+    
+    // Must be from bank-like sender
+    final isBankSender = senderLower.contains('bank') || senderLower.contains('bk') || 
+                        senderLower.contains('bnk') || senderLower.startsWith('ad-') ||
+                        senderLower.startsWith('vm-') || senderLower.startsWith('tm-') ||
+                        senderLower.length <= 10; // Short codes are usually from banks
+    if (!isBankSender) return false;
+    
+    // Additional safety: reject if contains common non-transaction phrases
+    final nonTransactionPhrases = [
+      'thank you for choosing', 'visit our website', 'call customer care',
+      'download our app', 'register now', 'activate your', 'update your',
+      'verify your', 'confirm your', 'click the link', 'terms and conditions'
+    ];
+    
+    final hasNonTransactionPhrase = nonTransactionPhrases.any((phrase) => bodyLower.contains(phrase));
+    if (hasNonTransactionPhrase) return false;
+    
+    return true;
   }
 
   /// Check if bank name matches sender characters

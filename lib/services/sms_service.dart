@@ -635,7 +635,10 @@ class SmsService {
     final bodyLower = smsBody.toLowerCase();
     final senderLower = sender.toLowerCase();
     
-    // Method 1: Look for explicit bank mentions in SMS body (UNIVERSAL PATTERNS)
+    // Method 1: Priority-based bank extraction that matches sender
+    List<String> foundBanks = [];
+    
+    // Find ALL bank mentions in SMS body
     final universalBankPatterns = [
       // Full bank names with "Bank"
       r'([a-zA-Z\s]+)\s+bank(?:\s+ltd)?(?:\s+limited)?',
@@ -654,19 +657,62 @@ class SmsService {
           // Check if this extracted name matches our mapping
           final mappedName = bankNameMapping[bankName.toLowerCase()];
           if (mappedName != null) {
-            return mappedName;
-          }
-          // If not in mapping, format it properly
-          if (bankName.toLowerCase().contains('bank')) {
-            return _formatBankName(bankName);
+            foundBanks.add(mappedName);
           } else {
-            return _formatBankName('$bankName Bank');
+            // If not in mapping, format it properly
+            if (bankName.toLowerCase().contains('bank')) {
+              foundBanks.add(_formatBankName(bankName));
+            } else {
+              foundBanks.add(_formatBankName('$bankName Bank'));
+            }
+          }
+        }
+      }
+    }
+    
+    // If multiple banks found, prioritize based on sender match
+    if (foundBanks.length > 1) {
+      // Check which bank name characters match the sender
+      for (final bankName in foundBanks) {
+        if (_doesBankMatchSender(bankName, sender)) {
+          return bankName;
+        }
+      }
+      
+      // If no direct match, prefer banks mentioned at the end of SMS
+      // (usually the actual sending bank)
+      return foundBanks.last;
+    } else if (foundBanks.isNotEmpty) {
+      return foundBanks.first;
+    }
+
+    // Method 2: Look for bank signatures at the end of SMS (highest priority)
+    final endSignaturePatterns = [
+      r'-\s*([a-zA-Z\s]+(?:bank|ltd|limited))\s*$',  // "- Canara Bank" at end
+      r'regards[,\s]*([a-zA-Z\s]+bank)\s*$',          // "Regards, HDFC Bank" at end  
+      r'from[,\s]*([a-zA-Z\s]+bank)\s*$',             // "From, SBI Bank" at end
+      r'thank\s+you[,\s]*([a-zA-Z\s]+bank)\s*$',      // "Thank you, Axis Bank" at end
+    ];
+
+    for (final pattern in endSignaturePatterns) {
+      final regex = RegExp(pattern, caseSensitive: false);
+      final match = regex.firstMatch(smsBody);
+      if (match != null) {
+        final extractedName = match.group(1)?.trim().toLowerCase() ?? '';
+        if (extractedName.isNotEmpty && extractedName.length > 2) {
+          final mappedName = bankNameMapping[extractedName];
+          if (mappedName != null && _doesBankMatchSender(mappedName, sender)) {
+            return mappedName;
+          } else if (mappedName != null) {
+            foundBanks.add(mappedName);
+          } else {
+            foundBanks.add(_formatBankName(extractedName));
           }
         }
       }
     }
 
-    // Method 2: Look for bank name patterns in SMS content (UNIVERSAL)
+    // Method 3: Look for bank name patterns in SMS content (UNIVERSAL)
     final contentPatterns = [
       r'dear\s+([a-zA-Z\s]+)\s+(?:bank\s+)?customer',
       r'([a-zA-Z\s]+)\s+bank\s+a/?c',
@@ -687,22 +733,34 @@ class SmsService {
         if (extractedName.isNotEmpty && extractedName.length > 2) {
           final mappedName = bankNameMapping[extractedName];
           if (mappedName != null) {
-            return mappedName;
+            foundBanks.add(mappedName);
+          } else {
+            foundBanks.add(_formatBankName('$extractedName Bank'));
           }
-          // Format unknown bank name
-          return _formatBankName('$extractedName Bank');
         }
       }
     }
+    
+    // If we found banks, prioritize by sender match
+    if (foundBanks.isNotEmpty) {
+      // First check for sender matches
+      for (final bankName in foundBanks) {
+        if (_doesBankMatchSender(bankName, sender)) {
+          return bankName;
+        }
+      }
+      // Return the last found bank (likely the signature bank)
+      return foundBanks.last;
+    }
 
-    // Method 3: Check sender against bank mapping (COMPREHENSIVE)
+    // Method 4: Check sender against bank mapping (COMPREHENSIVE)
     for (final entry in bankNameMapping.entries) {
       if (senderLower.contains(entry.key)) {
-        return entry.value;
+        foundBanks.add(entry.value);
       }
     }
 
-    // Method 4: Extract bank name from sender (UNIVERSAL FALLBACK)
+    // Method 5: Extract bank name from sender (UNIVERSAL FALLBACK)
     final senderPatterns = [
       r'([a-zA-Z]+)(?:-|_)?(?:bank|bk|bnk)',
       r'(?:ad|vm|tm|hd)-([a-zA-Z]+)',
@@ -717,21 +775,79 @@ class SmsService {
         if (extractedName.isNotEmpty && extractedName.length > 2) {
           final mappedName = bankNameMapping[extractedName.toLowerCase()];
           if (mappedName != null) {
-            return mappedName;
+            foundBanks.add(mappedName);
+          } else {
+            foundBanks.add(_formatBankName('$extractedName Bank'));
           }
-          // Format unknown bank name
-          return _formatBankName('$extractedName Bank');
         }
       }
     }
+    
+    // Final prioritization of found banks
+    if (foundBanks.isNotEmpty) {
+      // Remove duplicates while preserving order
+      final uniqueBanks = <String>[];
+      for (final bank in foundBanks) {
+        if (!uniqueBanks.contains(bank)) {
+          uniqueBanks.add(bank);
+        }
+      }
+      
+      // First check for sender matches
+      for (final bankName in uniqueBanks) {
+        if (_doesBankMatchSender(bankName, sender)) {
+          return bankName;
+        }
+      }
+      
+      // Return the last found bank (likely the signature bank)
+      return uniqueBanks.last;
+    }
 
-    // Method 5: Clean up sender name as final fallback
+    // Method 6: Clean up sender name as final fallback
     String cleanSender = sender.replaceAll(RegExp(r'[^a-zA-Z\s-]'), '').trim();
     if (cleanSender.isNotEmpty && cleanSender.length > 2) {
       return _formatBankName(cleanSender);
     }
 
     return 'Unknown Bank';
+  }
+
+  /// Check if bank name matches sender characters
+  bool _doesBankMatchSender(String bankName, String sender) {
+    final bankLower = bankName.toLowerCase();
+    final senderLower = sender.toLowerCase();
+    
+    // Extract key bank identifiers and check if they appear in sender
+    final bankIdentifiers = <String>[];
+    
+    if (bankLower.contains('hdfc')) bankIdentifiers.add('hdfc');
+    if (bankLower.contains('icici')) bankIdentifiers.add('icici');
+    if (bankLower.contains('sbi') || bankLower.contains('state bank')) bankIdentifiers.add('sbi');
+    if (bankLower.contains('axis')) bankIdentifiers.add('axis');
+    if (bankLower.contains('kotak')) bankIdentifiers.add('kotak');
+    if (bankLower.contains('federal')) bankIdentifiers.addAll(['fed', 'federal']);
+    if (bankLower.contains('yes')) bankIdentifiers.add('yes');
+    if (bankLower.contains('punjab') || bankLower.contains('pnb')) bankIdentifiers.add('pnb');
+    if (bankLower.contains('canara')) bankIdentifiers.add('canara');
+    if (bankLower.contains('baroda') || bankLower.contains('bob')) bankIdentifiers.addAll(['bob', 'baroda']);
+    if (bankLower.contains('union')) bankIdentifiers.add('union');
+    if (bankLower.contains('idbi')) bankIdentifiers.add('idbi');
+    if (bankLower.contains('indusind')) bankIdentifiers.addAll(['indus', 'indusind']);
+    if (bankLower.contains('rbl')) bankIdentifiers.add('rbl');
+    if (bankLower.contains('bandhan')) bankIdentifiers.add('bandhan');
+    if (bankLower.contains('dbs')) bankIdentifiers.add('dbs');
+    if (bankLower.contains('central')) bankIdentifiers.add('central');
+    if (bankLower.contains('indian')) bankIdentifiers.add('indian');
+    
+    // Check if any bank identifier appears in the sender
+    for (final identifier in bankIdentifiers) {
+      if (senderLower.contains(identifier)) {
+        return true;
+      }
+    }
+    
+    return false;
   }
 
   /// Format bank name properly
@@ -1026,6 +1142,16 @@ class SmsService {
         bank: 'State Bank of India',
         description: 'Rs.1200.00 received via VPA to SBI Bank A/c **9012 from friend@oksbi. Available Balance: Rs.18000.00. Ref: VPA123456',
         transactionType: 'UPI',
+      ),
+      Transaction(
+        id: 'demo_11',
+        sender: 'CANARA-BK',
+        date: now.subtract(const Duration(days: 8)),
+        amount: 3475.00,
+        isCredit: true,
+        bank: 'Canara Bank',
+        description: 'An amount of INR 3,475.00 has been credited to XXXX0224 on 16/06/2025 towards NEFT by Sender PHONEPE PRIVATE LIMI FOR PHONE, IFSC YESB0000001, Sender A/c XXXX0025, YES BANK LTD, Worli, Mumbai, UTR YESPH51670217794, Total Avail. Bal INR 9241.42- Canara Bank',
+        transactionType: 'OTHER',
       ),
     ];
   }
